@@ -1,10 +1,16 @@
-# ChatBot (Postgres + psycopg + pytest)
+# ChatBot (FastAPI + Next.js + Postgres)
 
-This project provides a small database-backed storage layer + service layer for a chatbot:
+Monorepo: **FastAPI** backend (`src/companion/`) and **Next.js** web UI (`frontend/`).
+
+**Backend**
 - Users / Sessions / Messages / Relationship state
 - PostgreSQL (local Docker **or** hosted e.g. Neon)
 - psycopg3 + connection pool
 - pytest tests (auto reset schema)
+
+**Frontend** (`frontend/`)
+- **Next.js 14** (App Router), **React 18**, **TypeScript**
+- Talks to the API via `NEXT_PUBLIC_API_URL` (see `frontend/.env.local.example`)
 
 ## Quick start
 
@@ -70,7 +76,7 @@ API docs: http://127.0.0.1:8000/docs
 
 ## Frontend (Next.js + React + TypeScript)
 
-Frontend lives in `frontend/`. Start the backend API first, then run the frontend.
+The UI is a **Next.js 14** app (React 18, TypeScript, `app/` router). Start the backend API first, then run the frontend from `frontend/`.
 
 ```powershell
 cd frontend
