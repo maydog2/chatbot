@@ -1,0 +1,2 @@
+ALTER TABLE bots ADD COLUMN IF NOT EXISTS primary_interest TEXT;
+ALTER TABLE bots ADD COLUMN IF NOT EXISTS secondary_interests JSONB NOT NULL DEFAULT '[]'::jsonb;

@@ -1,0 +1,36 @@
+# Editor / IDE
+.idea/
+.cursor/
+.vscode/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# Environment files (keep examples)
+.env
+.env.*
+.env*/
+.env.local
+.env.local.*
+!.env*.example
+
+# Node / Next.js (frontend)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+frontend/next-env.d.ts
+
+# Local-only folders (avoid accidentally committing)
+New folder/
