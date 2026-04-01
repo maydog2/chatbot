@@ -96,7 +96,7 @@ Tokens are opaque strings to the client; the UI stores them and attaches them to
 
 Typical path: the client sends a chat turn for a specific bot. The backend authenticates the user, resolves the bot/session, persists the user message, builds model context from recent transcript and companion state, calls the LLM provider, stores the assistant reply, applies post-turn state updates, and returns the new reply plus refreshed relationship metrics.
 
-Relationship-state updates may occur at multiple points in the turn pipeline: optional client-provided deltas, server-side updates derived from the latest user turn, and post-reply trigger rules after the assistant response is generated.
+Relationship-state updates may occur at multiple points in the turn pipeline: optional client-provided deltas, server-side updates derived from the latest user turn, and post-reply trigger rules after the assistant response is generated. Game-related interactions may also trigger relationship updates through dedicated endpoints.
 
 1. **Authenticate the user** — Resolve `user_id` from the bearer token.
 2. **Resolve the bot and active session** — Load the bot for this user and identify the session backing that bot’s current conversation thread.

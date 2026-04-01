@@ -49,6 +49,7 @@ A full-stack AI companion chat platform with persistent sessions, customizable b
 - **Companion management** — Create and manage multiple bots per account, each with its own persona, interests, initiative level, avatar, and persistent conversation history.
 - **Persistent conversations** — Resume chats across visits with durable session and message storage.
 - **Relationship-aware responses** — Replies incorporate persistent companion state, including trust, resonance, affection, openness, mood, interests, and initiative.
+- **Gomoku minigame** — In-game side chat uses the same bot session for persistence; relationship metrics can also refresh immediately during the game.
 - **LLM provider support** — Integrate with OpenAI-compatible chat providers using configurable model and endpoint settings.
 
 ## Project Structure

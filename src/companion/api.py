@@ -23,7 +23,7 @@ CreateBotIn, UpdateBotIn, BuildPromptIn, ReplyIn, UpdateMeIn, etc.
 from __future__ import annotations
 
 import os
-from typing import Generator, Literal
+from typing import Any, Generator, Literal
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
     db.init_pool()
     db.ensure_relationship_mood_state_v1()
     db.ensure_bot_initiative_column()
+    db.ensure_bot_personality_column()
     service.ensure_companion_stderr_logging()
     try:
         yield
@@ -133,6 +134,29 @@ class HistoryBotIn(BaseModel):
     limit: int = 50
 
 
+class GameChatTurnIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ActiveGameStateIn(BaseModel):
+    """Client-held minigame state; when set with ephemeral_game, chat is not persisted."""
+
+    type: Literal["gomoku"] = "gomoku"
+    difficulty: Literal["relaxed", "serious"]
+    current_turn: Literal["user", "bot"]
+    bot_side: Literal["white", "black"]
+
+
+class EphemeralGameIn(BaseModel):
+    active_game: ActiveGameStateIn
+    game_messages: list[GameChatTurnIn] = Field(default_factory=list)
+    position_summary: dict[str, Any] | None = None
+    # Optional relationship events produced by the client minigame UI.
+    # Kept as strings so older clients can still talk to newer servers.
+    relationship_events: list[str] = Field(default_factory=list)
+
+
 class SendBotMessageIn(BaseModel):
     bot_id: int
     content: str
@@ -140,9 +164,18 @@ class SendBotMessageIn(BaseModel):
     trust_delta: int = 0
     resonance_delta: int = 0
     include_initiative_debug: bool = False
+    ephemeral_game: EphemeralGameIn | None = None
+
+
+class GomokuRelationshipEventsIn(BaseModel):
+    bot_id: int
+    relationship_events: list[str] = Field(default_factory=list)
+    position_summary: dict[str, Any] | None = None
 
 
 InitiativeLevel = Literal["low", "medium", "high"]
+
+GameReplyStyle = Literal["playful", "cool", "gentle", "tsundere"]
 
 
 class CreateBotIn(BaseModel):
@@ -153,6 +186,7 @@ class CreateBotIn(BaseModel):
     primary_interest: str
     secondary_interests: list[str] = Field(default_factory=list)
     initiative: InitiativeLevel = "medium"
+    personality: GameReplyStyle = "gentle"
 
 
 class UpdateBotIn(BaseModel):
@@ -163,6 +197,7 @@ class UpdateBotIn(BaseModel):
     primary_interest: str | None = None
     secondary_interests: list[str] | None = None
     initiative: InitiativeLevel | None = None
+    personality: GameReplyStyle | None = None
 
 
 class BuildPromptIn(BaseModel):
@@ -269,6 +304,9 @@ def send_bot_message(
             trust_delta=payload.trust_delta,
             resonance_delta=payload.resonance_delta,
             include_initiative_debug=payload.include_initiative_debug,
+            ephemeral_game=payload.ephemeral_game.model_dump(mode="json")
+            if payload.ephemeral_game
+            else None,
             conn=conn,  # type: ignore
         )
         display_name = service.get_display_name(user_id, conn=conn)  # type: ignore
@@ -280,6 +318,51 @@ def send_bot_message(
         if "OPENAI_API_KEY is not set" in msg:
             raise HTTPException(status_code=503, detail="AI chat not configured (set OPENAI_API_KEY).")
         raise HTTPException(status_code=503, detail=msg)
+
+
+@app.post("/games/gomoku/relationship-events")
+def gomoku_relationship_events(
+    payload: GomokuRelationshipEventsIn,
+    user_id: int = Depends(get_current_user_id),
+    conn=Depends(get_db_conn),
+):
+    """
+    Apply Gomoku relationship events immediately (no chat turn).
+    Returns updated relationship metrics for UI refresh.
+    """
+    from companion.domain import gomoku_relationship
+
+    evs = [str(x) for x in (payload.relationship_events or []) if str(x).strip()]
+    pos = payload.position_summary
+    # allow client to send only position_summary and skip explicit events
+    if isinstance(pos, dict):
+        pe = pos.get("events")
+        if isinstance(pe, list):
+            if "user_created_threat" in pe:
+                evs.append("user_created_strong_threat")
+            if "user_blocked_bot_threat" in pe:
+                evs.append("user_blocked_bot_threat")
+        mr = pos.get("match_result")
+        if mr in ("user_win", "bot_win"):
+            evs.append(str(mr))
+    # dedupe
+    seen: set[str] = set()
+    evs = [e for e in evs if not (e in seen or seen.add(e))]
+    eff = gomoku_relationship.aggregate_gomoku_relationship_effects(evs)
+    db.apply_relationship_turn_deltas(
+        user_id=user_id,
+        bot_id=payload.bot_id,
+        trust_delta=eff.trust,
+        resonance_delta=eff.resonance,
+        affection_delta=eff.affection,
+        openness_delta=eff.openness,
+        mood_override=eff.mood_override,
+        mood_nudge=eff.mood_nudge,
+        mood_force=True,
+        user_message="",
+        conn=conn,
+    )
+    return service.get_relationship_public(user_id, payload.bot_id, conn=conn)  # type: ignore
 
 
 @app.post("/bots")
@@ -299,6 +382,7 @@ def create_bot(
             primary_interest=payload.primary_interest,
             secondary_interests=payload.secondary_interests,
             initiative=payload.initiative,
+            personality=payload.personality,
             conn=conn,  # type: ignore
         )
         return bot
@@ -346,7 +430,8 @@ def update_bot_route(
     Update bot fields (rename / edit persona). Persists to DB.
     If direction is updated, system_prompt is rebuilt from direction + relationship metrics.
     """
-    fields = payload.model_fields_set
+    # Use exclude_unset so PATCH only applies keys present in the JSON body (reliable vs model_fields_set).
+    patch = payload.model_dump(exclude_unset=True)
     try:
         bot = service.update_bot(
             user_id,
@@ -358,13 +443,15 @@ def update_bot_route(
             primary_interest=payload.primary_interest,
             secondary_interests=payload.secondary_interests,
             initiative=payload.initiative,
-            update_name="name" in fields,
-            update_direction="direction" in fields,
-            update_avatar="avatar_data_url" in fields,
-            update_form_of_address="form_of_address" in fields,
-            update_primary_interest="primary_interest" in fields,
-            update_secondary_interests="secondary_interests" in fields,
-            update_initiative="initiative" in fields,
+            personality=payload.personality,
+            update_name="name" in patch,
+            update_direction="direction" in patch,
+            update_avatar="avatar_data_url" in patch,
+            update_form_of_address="form_of_address" in patch,
+            update_primary_interest="primary_interest" in patch,
+            update_secondary_interests="secondary_interests" in patch,
+            update_initiative="initiative" in patch,
+            update_personality="personality" in patch,
             conn=conn,  # type: ignore
         )
         return bot

@@ -5,7 +5,7 @@ Import: ``from companion.infra import db`` then ``db.create_user(...)``, etc.
 
 Public API (aggregated from submodules; see each file for details):
   Pool / startup: DB_URL, init_pool, close_pool, ensure_relationship_mood_state_v1,
-    ensure_bot_initiative_column
+    ensure_bot_initiative_column, ensure_bot_personality_column
   Users: create_user, delete_user, get_display_name, get_user_id, get_password_hash,
     get_created_at, get_user_avatar_data_url, verify_password, update_user_password,
     update_user_display_name, update_user_avatar_data_url, get_user_field, update_user_field
@@ -41,6 +41,7 @@ from .pool import (
     DB_URL,
     close_pool,
     ensure_bot_initiative_column,
+    ensure_bot_personality_column,
     ensure_relationship_mood_state_v1,
     init_pool,
 )
@@ -101,6 +102,7 @@ __all__ = [
     "delete_user",
     "end_session",
     "ensure_bot_initiative_column",
+    "ensure_bot_personality_column",
     "ensure_relationship_mood_state_v1",
     "get_active_session_id",
     "get_bot",

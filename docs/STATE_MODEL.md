@@ -107,6 +107,8 @@ These are **not** the numeric relationship metrics, but they **ship on the same 
 
 Disabled or failed classifier → **no triggers** for that turn; stats may still have changed earlier from client deltas or the pre-reply pass.
 
+**Minigame (Gomoku):** discrete client-reported events can update trust/resonance/affection/openness/mood through a **fixed server-side table**—either **POST /games/gomoku/relationship-events** (no LLM, no new messages) or **`ephemeral_game.relationship_events`** on **POST /chat/send-bot-message**. Game-driven mood updates may use a **forced** path that skips the usual minimum time between mood-label changes.
+
 ### 5.2 Trigger-shaped updates (illustrative, not exhaustive)
 
 Internally, ids such as **gratitude**, **apology**, **vulnerability**, **playful banter**, **compliment to bot**, **mild friction / harsh rebuke / dismissive short**, **seeks support**, **shares joy / distress**, **comforting assistant tone**, **bonding smalltalk**, **cold or hostile exchange**, **reconciliation**, etc., map to **bounded** changes in trust/resonance/affection/openness and sometimes **mood**. This is the main **automatic** way the four stats and mood move after a full exchange.

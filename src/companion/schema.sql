@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS bots (
   primary_interest  TEXT,
   secondary_interests JSONB NOT NULL DEFAULT '[]'::jsonb,
   initiative      TEXT NOT NULL DEFAULT 'medium' CHECK (initiative IN ('low', 'medium', 'high')),
+  personality     TEXT NOT NULL DEFAULT 'gentle' CHECK (personality IN ('tsundere', 'playful', 'cool', 'gentle')),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

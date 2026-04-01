@@ -5,6 +5,7 @@ Public API:
   DB_URL — resolved from env DB_URL with local default
   ensure_relationship_mood_state_v1 — apply migration 010 if mood columns missing
   ensure_bot_initiative_column — add bots.initiative if missing
+  ensure_bot_personality_column — add bots.personality if missing; migrate old enum to user-chosen four styles
   init_pool / close_pool — psycopg ConnectionPool lifecycle
 
 Internal:
@@ -92,6 +93,50 @@ def ensure_bot_initiative_column() -> None:
             )
         conn.commit()
     logger.info("Applied schema: bots.initiative")
+
+
+def ensure_bot_personality_column() -> None:
+    """Add bots.personality if missing; migrate pre-user-choice enum (lively/cold/default) to playful/cool/gentle."""
+    mig_013 = _COMPANION_ROOT / "migrations" / "013_bot_personality_user_choice.sql"
+    with psycopg.connect(DB_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'bots'
+                  AND column_name = 'personality'
+                LIMIT 1
+                """
+            )
+            col_exists = cur.fetchone() is not None
+            if not col_exists:
+                cur.execute(
+                    """
+                    ALTER TABLE bots
+                    ADD COLUMN personality TEXT NOT NULL DEFAULT 'gentle'
+                    CHECK (personality IN ('tsundere', 'playful', 'cool', 'gentle'))
+                    """
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT 1 FROM pg_constraint c
+                    JOIN pg_class t ON c.conrelid = t.oid
+                    JOIN pg_namespace n ON t.relnamespace = n.oid
+                    WHERE n.nspname = 'public' AND t.relname = 'bots' AND c.contype = 'c'
+                      AND pg_get_constraintdef(c.oid) LIKE '%playful%'
+                    LIMIT 1
+                    """
+                )
+                if cur.fetchone() is None and mig_013.is_file():
+                    raw = mig_013.read_text(encoding="utf-8")
+                    lines = [ln for ln in raw.splitlines() if not ln.strip().startswith("--")]
+                    sql_body = "\n".join(lines).strip()
+                    for part in [p.strip() for p in sql_body.split(";") if p.strip()]:
+                        cur.execute(part + ";")
+        conn.commit()
+    logger.info("Ensured bots.personality (game reply style)")
 
 
 _pool: ConnectionPool | None = None

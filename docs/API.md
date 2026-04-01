@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This API is implemented as a FastAPI backend for the chatbot app. It supports authentication, bot management, persistent per-bot conversation history, relationship-state access, and LLM-backed response generation. OpenAPI UI: `GET /docs`.
+This API powers the chatbot application backend. It provides authentication, bot management, persistent conversations, relationship-state tracking, and LLM-backed messaging, with additional support for game-related interaction features.
 
 ## 2. Base URL
 
@@ -190,6 +190,7 @@ Lists the current user’s bots.
       "primary_interest": "anime",
       "secondary_interests": ["music"],
       "initiative": "medium",
+      "personality": "gentle",
       "created_at": "2026-03-27T10:00:00"
     }
   ]
@@ -199,6 +200,7 @@ Lists the current user’s bots.
 **Notes**
 
 - Field semantics: [Appendix C](#appendix-c--prompts-llm-and-send-bot-message). Fetching a single bot by id: [Appendix B](#appendix-b--current-http-behavior-and-edge-cases).
+- **`personality`:** in-app game/side-chat reply style: `playful` | `cool` | `gentle` | `tsundere` (default `gentle` on create).
 
 #### POST /bots
 
@@ -216,11 +218,12 @@ Creates a bot, session, initial `system_prompt`, and relationship row.
   "form_of_address": null,
   "primary_interest": "anime",
   "secondary_interests": ["games"],
-  "initiative": "medium"
+  "initiative": "medium",
+  "personality": "gentle"
 }
 ```
 
-(`primary_interest` required; `initiative` is `low` | `medium` | `high`.)
+(`primary_interest` required; `initiative` is `low` | `medium` | `high`; `personality` optional, default `gentle`.)
 
 **Response:** one bot object (same shape as list items).
 
@@ -242,7 +245,8 @@ Partial update; changing `direction` / interests can rebuild `system_prompt` fro
 {
   "name": "Renamed",
   "direction": "More playful.",
-  "initiative": "high"
+  "initiative": "high",
+  "personality": "playful"
 }
 ```
 
@@ -293,6 +297,38 @@ Main chat: **saves** the user message, **calls the LLM**, **saves** the assistan
 }
 ```
 
+Optional **`ephemeral_game`** (Gomoku side-chat while playing): same top-level fields as above, plus:
+
+```json
+{
+  "bot_id": 1,
+  "content": "Nice move.",
+  "system_prompt": "",
+  "trust_delta": 0,
+  "resonance_delta": 0,
+  "include_initiative_debug": false,
+  "ephemeral_game": {
+    "active_game": {
+      "type": "gomoku",
+      "difficulty": "serious",
+      "current_turn": "user",
+      "bot_side": "white"
+    },
+    "game_messages": [
+      { "role": "user", "content": "Earlier line in the minigame thread." },
+      { "role": "assistant", "content": "Earlier reply in the minigame thread." }
+    ],
+    "position_summary": null,
+    "relationship_events": []
+  }
+}
+```
+
+- **`ephemeral_game.active_game`:** `type` is always `"gomoku"`; `difficulty` is `relaxed` | `serious`; `current_turn` is `user` | `bot`; `bot_side` is `white` | `black`.
+- **`ephemeral_game.game_messages`:** each item **`role`** must be **`user`** or **`assistant`** only (no `system`)—otherwise validation returns **422**.
+- **`ephemeral_game.position_summary`:** optional JSON object from the client’s board analysis (shape is client-defined; used to steer the reply and to derive relationship hints server-side when present).
+- **`ephemeral_game.relationship_events`:** optional list of server-known event id strings (e.g. `user_win`, `bot_win`); merged with hints derived from `position_summary` when applicable. See **POST /games/gomoku/relationship-events** for the same id vocabulary.
+
 **Response**
 
 ```json
@@ -313,7 +349,8 @@ Main chat: **saves** the user message, **calls the LLM**, **saves** the assistan
 **Notes**
 
 - **400** if `bot_id` is not owned by the user.
-- Prompt construction and debug-only fields: [Appendix C](#appendix-c--prompts-llm-and-send-bot-message) and [Appendix D](#appendix-d--debug-and-unstable-fields).
+- **With `ephemeral_game`:** the **current** user message and **assistant** reply are still **written** to the bot’s normal **`messages`** transcript (same `session_id` as without a minigame). The effective LLM transcript is built from **persisted** history; `game_messages` is **not** re-appended to the model input (avoids duplicating lines once they are stored).
+- Prompt construction, minigame constraints, and debug-only fields: [Appendix C](#appendix-c--prompts-llm-and-send-bot-message) and [Appendix D](#appendix-d--debug-and-unstable-fields).
 
 #### POST /chat/history/bot
 
@@ -414,6 +451,50 @@ Ends a **user-level** “current session” (legacy helper); not the same as per
 
 ---
 
+### Games
+
+#### POST /games/gomoku/relationship-events
+
+Applies **Gomoku-related** relationship updates **without** calling the LLM and **without** creating chat messages. Intended for **immediate** UI refresh (trust, resonance, affection, openness, mood) when the client detects board outcomes or other discrete game events.
+
+**Authentication:** Required.
+
+**Request body**
+
+```json
+{
+  "bot_id": 1,
+  "relationship_events": ["user_win"],
+  "position_summary": null
+}
+```
+
+- **`bot_id`:** required.
+- **`relationship_events`:** optional list of server-known id strings (e.g. `user_win`, `bot_win`, `user_restarted_while_losing`, `user_created_strong_threat`, `user_blocked_bot_threat`). Unknown ids are ignored.
+- **`position_summary`:** optional. When present, the server may **append** derived events from `events` / `match_result` (e.g. map `user_created_threat` → `user_created_strong_threat`) and deduplicate with `relationship_events`.
+
+**Response**
+
+Same JSON shape as **GET /bots/{bot_id}/relationship**:
+
+```json
+{
+  "trust": 41,
+  "resonance": 31,
+  "affection": 40,
+  "openness": 30,
+  "mood": "Playful",
+  "display_name": "Alice"
+}
+```
+
+**Notes**
+
+- **422** if body validation fails (e.g. wrong types).
+- Invalid or missing bot ownership may surface as **400** / **500** depending on the code path—prefer treating unexpected errors like **GET /bots/{bot_id}/relationship** (see [Appendix B](#appendix-b--current-http-behavior-and-edge-cases)).
+
+---
+
 ### Relationship
 
 #### GET /bots/{bot_id}/relationship
@@ -439,7 +520,7 @@ Read-only snapshot: trust, resonance, affection, openness, mood, plus the human 
 
 **Notes**
 
-- Metrics change via **POST /chat/send-bot-message** and server-side logic, not via this route. Status behavior for this path: [Appendix B](#appendix-b--current-http-behavior-and-edge-cases).
+- Metrics change via **POST /chat/send-bot-message**, **POST /games/gomoku/relationship-events**, and other server-side logic—not by writing to this route. Status behavior for this path: [Appendix B](#appendix-b--current-http-behavior-and-edge-cases).
 
 ---
 
@@ -460,6 +541,12 @@ Read-only snapshot: trust, resonance, affection, openness, mood, plus the human 
 1. Login → POST /bots (if needed)  
 2. POST /chat/build-prompt  
 3. Optional: POST /chat/reply (nothing persisted)
+
+**Gomoku: immediate relationship refresh (no chat)**
+
+1. Login → POST /bots (if needed)  
+2. POST /games/gomoku/relationship-events with `bot_id` and optional `relationship_events` / `position_summary`  
+3. GET /bots/{bot_id}/relationship (optional; the POST already returns the same shape)
 
 ---
 
@@ -501,12 +588,14 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 - **Relationship:** invalid `bot_id` may surface as **500** if the stack raises **`ValueError`** without an **`HTTPException`** wrapper.
 - **LLM / config:** missing **`OPENAI_API_KEY`** is often handled inside **`get_reply_for_custom_bot`** with a fallback assistant string → **200** on **send-bot-message** / **reply** in those cases, rather than **503**.
 - **503** on LLM routes: some propagated **`RuntimeError`** paths (e.g. invalid API key); see **`except RuntimeError`** on chat (and create-bot) in `companion/api.py`.
+- **Games:** **POST /games/gomoku/relationship-events** does not call the LLM; failures are usually **422** (validation) or depend on DB/bot resolution like other authenticated bot-scoped routes.
 
 ## Appendix C — Prompts, LLM, and `send-bot-message`
 
 - The **effective** model system prompt for **POST /chat/send-bot-message** is rebuilt server-side from the bot’s **`direction`**, relationship metrics, interests, initiative, addressing, etc. The **`system_prompt`** field in the request body is **not** the sole source for the actual LLM call (compatibility field; implementation ignores it for the real turn prompt).
 - **POST /chat/build-prompt** uses the authenticated user’s **first** bot for relationship context when composing text; it does not call the LLM.
 - **Provider:** model, base URL, and behavior follow **`OPENAI_API_KEY`**, optional **`OPENAI_BASE_URL`**, **`OPENAI_MODEL`**, etc.; output is non-deterministic across providers and runs.
+- **Minigame (`ephemeral_game`):** the server appends **Gomoku** constraints and, when provided, a **board-analysis** block from **`position_summary`** so the model does not contradict the client-held game state. Relationship deltas from **`relationship_events`** / **`position_summary`** may be applied on that turn (in addition to the usual post-reply trigger classifier).
 
 ## Appendix D — Debug and unstable fields
 

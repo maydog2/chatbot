@@ -71,6 +71,7 @@ def _mood_label_and_changed(
     now_ts: datetime,
     mood_override: str | None = None,
     mood_nudge: int = 0,
+    mood_force: bool = False,
 ) -> tuple[str, bool]:
     """
     Mood label changes only from trigger ``mood_override`` or ``mood_nudge`` (LLM-classified triggers),
@@ -97,6 +98,7 @@ def _mood_label_and_changed(
         minutes_since_last_change=minutes_since_change,
         current_strength=current_strength,
         candidate_strength=candidate_strength,
+        ignore_min_duration=bool(mood_force),
     )
     mood = candidate if should_change else prev_mood
     return mood, bool(should_change)
@@ -283,6 +285,7 @@ def apply_relationship_turn_deltas(
     *,
     mood_override: str | None = None,
     mood_nudge: int = 0,
+    mood_force: bool = False,
     trigger_ids: list[str] | None = None,
     user_message: str = "",
     interest_match: bool = False,
@@ -344,6 +347,7 @@ def apply_relationship_turn_deltas(
         now_ts=now_ts,
         mood_override=mood_override,
         mood_nudge=mood_nudge,
+        mood_force=bool(mood_force),
     )
 
     had_override = mood_override is not None

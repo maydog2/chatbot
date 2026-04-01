@@ -69,6 +69,7 @@ After changing this variable, **redeploy** the frontend so the value is baked in
 | `OPENAI_MODEL` | Optional | Model id (provider-specific) |
 | `CORS_ALLOW_ORIGINS` | Yes (prod) | Comma-separated browser origins allowed to call the API (see below) |
 | `CHATBOT_LOG_INITIATIVE` | Optional | `1` / `true` to log initiative diagnostics |
+| `CHATBOT_LOG_GOMOKU_SUMMARY` | Optional | `1` / `true` to log client `position_summary` JSON during Gomoku side-chat |
 | `CHATBOT_INITIATIVE_TONE_LLM` | Optional | Enable LLM-based tone hints for initiative |
 | `CHATBOT_TONE_MODEL` | Optional | Model for tone classifier |
 

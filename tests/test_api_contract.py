@@ -101,6 +101,43 @@ def _send_bot(
     )
 
 
+def _send_bot_ephemeral_gomoku(
+    client: TestClient,
+    bot_id: int,
+    content: str,
+    *,
+    auth_headers: dict[str, str] | None = None,
+    relationship_events: list[str] | None = None,
+    position_summary: dict | None = None,
+):
+    headers = auth_headers or {}
+    eph: dict = {
+        "active_game": {
+            "type": "gomoku",
+            "difficulty": "serious",
+            "current_turn": "user",
+            "bot_side": "white",
+        },
+        "game_messages": [],
+    }
+    if relationship_events:
+        eph["relationship_events"] = relationship_events
+    if position_summary:
+        eph["position_summary"] = position_summary
+    return client.post(
+        "/chat/send-bot-message",
+        json={
+            "bot_id": bot_id,
+            "content": content,
+            "system_prompt": "",
+            "trust_delta": 0,
+            "resonance_delta": 0,
+            "ephemeral_game": eph,
+        },
+        headers=headers,
+    )
+
+
 def _history_bot(
     client: TestClient,
     bot_id: int,
@@ -187,6 +224,51 @@ def test_history_bot_new_bot_returns_empty_messages(client: TestClient):
     assert r.status_code == 200, r.text
     assert r.json()["messages"] == []
 
+
+# -------------------------
+# 4) Gomoku relationship events (ephemeral)
+# -------------------------
+def test_gomoku_relationship_events_apply_to_stats_and_mood(client: TestClient):
+    r = _register(client, "dn", "u1", "pw1")
+    assert r.status_code == 200, r.text
+    auth = _auth_headers(client, "u1", "pw1")
+    assert auth is not None
+    rb = client.post(
+        "/bots",
+        json={"name": "g", "direction": "x", "primary_interest": "anime"},
+        headers=auth,
+    )
+    assert rb.status_code == 200, rb.text
+    bot_id = int(rb.json()["id"])
+
+    # Baseline relationship for a new bot is (40,30,40,30,"Calm") per service.create_bot.
+    r1 = _send_bot_ephemeral_gomoku(
+        client,
+        bot_id,
+        "gg",
+        auth_headers=auth,
+        relationship_events=["user_win"],
+        position_summary={
+            "phase": "endgame",
+            "eval": "even",
+            "urgency": "none",
+            "move_count": 12,
+            "last_move": None,
+            "last_move_by": None,
+            "current_turn": "user",
+            "game_over": True,
+            "match_result": "user_win",
+            "threats": {"user": [], "bot": []},
+            "winning_points": {"user": [], "bot": []},
+            "events": [],
+        },
+    )
+    assert r1.status_code == 200, r1.text
+    body = r1.json()
+    assert body["trust"] == 41
+    assert body["resonance"] == 31
+    assert body["mood"] in ("Playful", "Happy", "Calm", "Quiet", "Tired", "Irritated")
+    assert body["mood"] == "Playful"
 
 # -------------------------
 # 3) Idempotency tests
@@ -293,3 +375,31 @@ def test_create_bot_rejects_duplicate_avatar_data_url(client: TestClient):
     )
     assert r2.status_code == 400, r2.text
     assert "avatar" in (r2.json().get("detail") or "").lower()
+
+
+def test_patch_bot_personality_only_persists(client: TestClient):
+    """PATCH with only personality must update game reply style (partial body)."""
+    _register(client, "dn", "u_pers", "pw_pers")
+    auth = _auth_headers(client, "u_pers", "pw_pers")
+    assert auth is not None
+    rb = client.post(
+        "/bots",
+        json={"name": "sty", "direction": "x", "primary_interest": "anime"},
+        headers=auth,
+    )
+    assert rb.status_code == 200, rb.text
+    bot_id = int(rb.json()["id"])
+    assert rb.json().get("personality") == "gentle"
+
+    rp = client.patch(
+        f"/bots/{bot_id}",
+        json={"personality": "cool"},
+        headers=auth,
+    )
+    assert rp.status_code == 200, rp.text
+    assert rp.json().get("personality") == "cool"
+
+    rlist = client.get("/bots", headers=auth)
+    assert rlist.status_code == 200, rlist.text
+    row = next(b for b in rlist.json()["bots"] if b["id"] == bot_id)
+    assert row.get("personality") == "cool"

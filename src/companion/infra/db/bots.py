@@ -104,14 +104,15 @@ def create_bot(
     primary_interest: Optional[str] = None,
     secondary_interests: Optional[list[str]] = None,
     initiative: str = "medium",
+    personality: str = "gentle",
     conn: Optional[psycopg.Connection] = None,
 ) -> int:
     user_id = int(user_id)
     session_id = int(session_id)
     sec = secondary_interests if secondary_interests is not None else []
     sql = """
-        INSERT INTO bots (user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative)
-        VALUES (%(user_id)s, %(session_id)s, %(name)s, %(system_prompt)s, %(avatar_data_url)s, %(direction)s, %(form_of_address)s, %(primary_interest)s, %(secondary_interests)s, %(initiative)s)
+        INSERT INTO bots (user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, personality)
+        VALUES (%(user_id)s, %(session_id)s, %(name)s, %(system_prompt)s, %(avatar_data_url)s, %(direction)s, %(form_of_address)s, %(primary_interest)s, %(secondary_interests)s, %(initiative)s, %(personality)s)
         RETURNING id;
         """
     return _exec_returning_id(
@@ -127,6 +128,7 @@ def create_bot(
             "primary_interest": primary_interest,
             "secondary_interests": Json(sec),
             "initiative": initiative,
+            "personality": personality,
         },
         conn=conn,
     )
@@ -139,10 +141,10 @@ def get_bot(
 ) -> Optional[dict]:
     bot_id = int(bot_id)
     if user_id is not None:
-        sql = "SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, created_at FROM bots WHERE id = %(bot_id)s AND user_id = %(user_id)s;"
+        sql = "SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, personality, created_at FROM bots WHERE id = %(bot_id)s AND user_id = %(user_id)s;"
         row = _fetch_one_row(sql, {"bot_id": bot_id, "user_id": int(user_id)}, conn=conn)
     else:
-        sql = "SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, created_at FROM bots WHERE id = %(bot_id)s;"
+        sql = "SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, personality, created_at FROM bots WHERE id = %(bot_id)s;"
         row = _fetch_one_row(sql, {"bot_id": bot_id}, conn=conn)
     if row is None:
         return None
@@ -158,7 +160,8 @@ def get_bot(
         "primary_interest": row[8],
         "secondary_interests": _secondary_interests_list(row[9]),
         "initiative": row[10],
-        "created_at": row[11],
+        "personality": row[11],
+        "created_at": row[12],
     }
 
 
@@ -168,7 +171,7 @@ def get_bots_by_user(
 ) -> list[dict]:
     user_id = int(user_id)
     sql = """
-        SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, created_at
+        SELECT id, user_id, session_id, name, system_prompt, avatar_data_url, direction, form_of_address, primary_interest, secondary_interests, initiative, personality, created_at
         FROM bots
         WHERE user_id = %(user_id)s
         ORDER BY created_at ASC;
@@ -187,7 +190,8 @@ def get_bots_by_user(
             "primary_interest": r[8],
             "secondary_interests": _secondary_interests_list(r[9]),
             "initiative": r[10],
-            "created_at": r[11],
+            "personality": r[11],
+            "created_at": r[12],
         }
         for r in rows
     ]
@@ -205,6 +209,7 @@ def update_bot(
     primary_interest: object = _MISSING,
     secondary_interests: object = _MISSING,
     initiative: object = _MISSING,
+    personality: object = _MISSING,
     conn: Optional[psycopg.Connection] = None,
 ) -> Optional[dict]:
     """
@@ -263,6 +268,13 @@ def update_bot(
             raise ValueError("initiative must be low, medium, or high")
         params["initiative"] = ini
         sets.append("initiative = %(initiative)s")
+
+    if personality is not _MISSING:
+        pers = ("" if personality is None else str(personality)).strip().lower()
+        if pers not in ("tsundere", "playful", "cool", "gentle"):
+            raise ValueError("personality must be tsundere, playful, cool, or gentle")
+        params["personality"] = pers
+        sets.append("personality = %(personality)s")
 
     if not sets:
         return get_bot(bot_id, user_id=user_id, conn=conn)

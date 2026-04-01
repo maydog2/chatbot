@@ -434,11 +434,13 @@ def should_change_mood_label(
     minutes_since_last_change: float,
     current_strength: float,
     candidate_strength: float,
+    ignore_min_duration: bool = False,
 ) -> bool:
     """Use minimum duration and threshold margin to avoid mood thrashing."""
     if candidate_label == current_label:
         return False
-    min_minutes = MIN_MOOD_MINUTES.get(current_label, 0.0)
-    if minutes_since_last_change < min_minutes:
-        return False
+    if not ignore_min_duration:
+        min_minutes = MIN_MOOD_MINUTES.get(current_label, 0.0)
+        if minutes_since_last_change < min_minutes:
+            return False
     return (candidate_strength - current_strength) >= 3.0

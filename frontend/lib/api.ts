@@ -1,5 +1,13 @@
+/**
+ * `next dev`: always talk to local FastAPI unless you set NEXT_PUBLIC_DEV_USE_REMOTE_API=1
+ * in .env.local (ignores broken global NEXT_PUBLIC_API_URL on Windows / IDE).
+ * Production / `next start` / Vercel: uses NEXT_PUBLIC_API_URL.
+ */
 const API_BASE = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"
+  process.env.NODE_ENV === "development" &&
+  process.env.NEXT_PUBLIC_DEV_USE_REMOTE_API !== "1"
+    ? "http://127.0.0.1:8000"
+    : (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000")
 ).replace(/\/+$/, "");
 
 export type LoginResponse = {
@@ -30,6 +38,9 @@ export type Me = { display_name: string; avatar_data_url: string | null };
 
 export type BotInitiative = "low" | "medium" | "high";
 
+/** User-chosen game reply style (stored as personality). */
+export type BotPersonality = "playful" | "cool" | "gentle" | "tsundere";
+
 /** Returned when POST /chat/send-bot-message includes include_initiative_debug: true */
 export type InitiativeDebug = {
   base: BotInitiative;
@@ -38,6 +49,37 @@ export type InitiativeDebug = {
   interest_match: boolean;
   recent_user_messages: string[];
   total_turns_in_window: number;
+};
+
+/** Client-computed Gomoku position (see `lib/gomoku/analysis.ts`). */
+export type GomokuPositionSummaryPayload = {
+  phase: string;
+  eval: string;
+  urgency: string;
+  move_count: number;
+  last_move: { x: number; y: number } | null;
+  last_move_by: string | null;
+  current_turn: string;
+  game_over: boolean;
+  match_result: "user_win" | "bot_win" | "draw" | null;
+  threats: { user: string[]; bot: string[] };
+  winning_points: { user: { x: number; y: number }[]; bot: { x: number; y: number }[] };
+  events: string[];
+};
+
+/** Minigame side-chat: not stored in message history; sent with sendBotMessage. */
+export type EphemeralGamePayload = {
+  active_game: {
+    type: "gomoku";
+    difficulty: "relaxed" | "serious";
+    current_turn: "user" | "bot";
+    bot_side: "white" | "black";
+  };
+  game_messages: { role: "user" | "assistant"; content: string }[];
+  /** Optional: machine summary for in-character replies aligned with the real board. */
+  position_summary?: GomokuPositionSummaryPayload | null;
+  /** Optional: relationship-impacting minigame events (applied once on next send). */
+  relationship_events?: string[];
 };
 
 export type Bot = {
@@ -52,6 +94,7 @@ export type Bot = {
   primary_interest: string | null;
   secondary_interests: string[];
   initiative: BotInitiative;
+  personality: BotPersonality;
   created_at: string;
 };
 
@@ -69,7 +112,14 @@ async function request<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers, body });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error((err as { detail?: string }).detail ?? "Request failed");
+    const detail = (err as { detail?: unknown }).detail;
+    const msg =
+      typeof detail === "string"
+        ? detail
+        : detail != null
+          ? JSON.stringify(detail)
+          : res.statusText || "Request failed";
+    throw new Error(msg);
   }
   return res.json() as Promise<T>;
 }
@@ -114,12 +164,13 @@ export const api = {
     system_prompt: string,
     trust_delta = 0,
     resonance_delta = 0,
-    include_initiative_debug = false
+    include_initiative_debug = false,
+    ephemeral_game?: EphemeralGamePayload | null
   ) =>
     request<{
       session_id: number;
-      message_id: number;
-      assistant_message_id?: number;
+      message_id: number | null;
+      assistant_message_id?: number | null;
       assistant_reply: string;
       trust: number;
       resonance: number;
@@ -138,6 +189,7 @@ export const api = {
         trust_delta,
         resonance_delta,
         include_initiative_debug,
+        ...(ephemeral_game ? { ephemeral_game } : {}),
       },
     }),
 
@@ -154,7 +206,8 @@ export const api = {
     form_of_address: string | null = null,
     primary_interest: string,
     secondary_interests: string[] = [],
-    initiative: BotInitiative = "medium"
+    initiative: BotInitiative = "medium",
+    personality: BotPersonality = "gentle"
   ) => {
     const p = primary_interest.trim();
     if (!p) throw new Error("Primary interest is required.");
@@ -165,6 +218,7 @@ export const api = {
       primary_interest: p,
       secondary_interests,
       initiative,
+      personality,
     };
     const foa = (form_of_address ?? "").trim();
     if (foa) json.form_of_address = foa;
@@ -185,6 +239,7 @@ export const api = {
         | "primary_interest"
         | "secondary_interests"
         | "initiative"
+        | "personality"
       >
     >
   ) =>
@@ -203,6 +258,23 @@ export const api = {
 
   relationship: (token: string, bot_id: number) =>
     request<Relationship>(`/bots/${bot_id}/relationship`, { method: "GET", token }),
+
+  /** Apply Gomoku relationship events immediately (no chat turn). */
+  applyGomokuRelationshipEvents: (
+    token: string,
+    bot_id: number,
+    relationship_events: string[],
+    position_summary?: GomokuPositionSummaryPayload | null
+  ) =>
+    request<Relationship>("/games/gomoku/relationship-events", {
+      method: "POST",
+      token,
+      json: {
+        bot_id,
+        relationship_events,
+        ...(position_summary !== undefined ? { position_summary } : {}),
+      },
+    }),
 
   buildPrompt: (token: string, direction: string) =>
     request<{ system_prompt: string }>("/chat/build-prompt", {
