@@ -276,11 +276,11 @@ export const api = {
       },
     }),
 
-  buildPrompt: (token: string, direction: string) =>
+  buildPrompt: (token: string, bot_id: number, direction: string) =>
     request<{ system_prompt: string }>("/chat/build-prompt", {
       method: "POST",
       token,
-      json: { direction },
+      json: { bot_id, direction },
     }),
 
   reply: (token: string, messages: Array<{ role: string; content: string }>, system_prompt: string) =>

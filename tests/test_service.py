@@ -1,6 +1,14 @@
 import pytest
 import uuid
 from companion import service
+from companion.service.persona_guard import (
+    build_persona_rewrite_instruction,
+    detect_persona_violations,
+)
+from companion.service.reply_postprocess import (
+    enforce_irritated_tone_floor,
+    enforce_low_activity_reply_style,
+)
 
 
 @pytest.fixture
@@ -96,6 +104,42 @@ def test_send_and_get_history_includes_latest_message(user, stub_llm):
     assert [m["content"] for m in res3["history"]] == ["!", "stub reply"]
 
 
+def test_persona_guard_detects_chinese_sensory_disclaimer():
+    violations = detect_persona_violations("虽然我无法真正品尝，但我会选择拉面。")
+    assert [v.code for v in violations] == ["sensory_disclaimer"]
+    instruction = build_persona_rewrite_instruction(
+        latest_user_message="你喜欢吃什么？",
+        draft_reply="虽然我无法真正品尝，但我会选择拉面。",
+        violations=violations,
+    )
+    assert "Keep the same language as the real latest user message" in instruction
+    assert "sensory_disclaimer" in instruction
+
+
+def test_persona_guard_detects_english_model_self_disclosure():
+    violations = detect_persona_violations("I'm a language model powered by OpenAI.")
+    assert [v.code for v in violations] == ["ai_self_disclosure"]
+
+
+def test_send_bot_message_rewrites_persona_break_once(user, monkeypatch):
+    calls = []
+
+    def fake_reply(messages):
+        calls.append(messages)
+        if len(calls) == 1:
+            return "虽然我无法真正品尝，但我会选择拉面。"
+        return "我会选拉面，热汤和叉烧都很合我胃口。"
+
+    monkeypatch.setattr("companion.infra.llm.get_reply", fake_reply)
+    user_id = user["id"]
+    bot = service.create_bot(user_id, "rewrite-bot", "a friendly test bot", primary_interest="anime")
+    response = service.send_bot_message(user_id, int(bot["id"]), "你喜欢吃什么？", bot["system_prompt"])
+
+    assert len(calls) == 2
+    assert "Internal rewrite request" in calls[1][-1]["content"]
+    assert response["assistant_reply"] == "我会选拉面，热汤和叉烧都很合我胃口。"
+
+
 def test_issue_access_token_success_and_token_can_be_used(user, auth_env):
     # user fixture gives {"id","username","password",...}; auth_env sets AUTH_TOKEN_SECRET
     res = service.issue_access_token(user["username"], user["password"])
@@ -117,33 +161,6 @@ def test_get_user_id_from_token_invalid_raises(auth_env):
         service.get_user_id_from_token("this_is_not_a_real_token")
 
 
-def test_strip_roleplay_sensory_disclaimers_removes_chinese_taste_opening():
-    raw = "虽然不能实际品尝食物，但我会对那些料理感兴趣。"
-    out = service._strip_roleplay_sensory_disclaimers(raw)
-    assert "品尝" not in out
-    assert "料理" in out
-
-
-def test_strip_conditional_taste_opening_and_meta_sentence():
-    raw = (
-        "如果能品尝，我可能会对充满风味的料理情有独钟，像是日式拉面。"
-        "美食的多样性和复杂的风味总是令人着迷。"
-    )
-    out = service._strip_roleplay_sensory_disclaimers(raw)
-    assert "如果能" not in out
-    assert "着迷" not in out
-    assert "拉面" in out
-
-
-def test_strip_imagination_taste_clause_and_trailing_meta():
-    raw = "虽然无法真正品尝，但在想象中，我会偏爱拉面。它们总能在想象中引发无限的味觉遐想。"
-    out = service._strip_roleplay_sensory_disclaimers(raw)
-    assert "无法真正品尝" not in out
-    assert "味觉遐想" not in out
-    assert "想象中引发" not in out
-    assert "拉面" in out
-
-
 def test_enforce_initiative_closing_question_strips_bounce_for_very_low():
     raw = "我偏爱汤底浓厚的拉面。你有什么钟爱的食物吗，Master？"
     out = service._enforce_initiative_closing_question(raw, "very_low")
@@ -154,3 +171,16 @@ def test_enforce_initiative_closing_question_strips_bounce_for_very_low():
 def test_enforce_initiative_closing_question_noop_for_moderate():
     raw = "你呢？"
     assert service._enforce_initiative_closing_question(raw, "moderate") == raw
+
+
+def test_enforce_low_activity_reply_style_strips_english_bounce_question():
+    raw = "I prefer black coffee. What about you?"
+    out = enforce_low_activity_reply_style(raw, "Tired")
+    assert out == "I prefer black coffee."
+
+
+def test_enforce_irritated_tone_floor_replaces_english_warm_service_phrase():
+    raw = "I'm still happy to help. Let me know anytime."
+    out = enforce_irritated_tone_floor(raw, "Irritated")
+    assert "happy to help" not in out.lower()
+    assert "let me know" not in out.lower()

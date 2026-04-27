@@ -8,6 +8,14 @@ from pathlib import Path
 _LOADED = False
 
 
+def _repo_root() -> Path:
+    """Find the project root by walking upward from this file."""
+    for path in Path(__file__).resolve().parents:
+        if (path / "pyproject.toml").exists() or (path / "requirements.txt").exists() or (path / ".git").exists():
+            return path
+    return Path(__file__).resolve().parents[3]
+
+
 def load_repo_dotenv() -> None:
     """
     Load ``<project_root>/.env`` if ``python-dotenv`` is installed.
@@ -26,6 +34,5 @@ def load_repo_dotenv() -> None:
     except ImportError:
         _LOADED = True
         return
-    root = Path(__file__).resolve().parents[3]
-    load_dotenv(root / ".env", override=False)
+    load_dotenv(_repo_root() / ".env", override=False)
     _LOADED = True

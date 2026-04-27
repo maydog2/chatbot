@@ -207,6 +207,40 @@ def test_history_bot_missing_bot_id_returns_422(client: TestClient):
     assert r.status_code == 422
 
 
+def test_bot_scoped_routes_return_404_for_unknown_bot(client: TestClient):
+    _register(client, "dn", "u1", "pw1")
+    auth = _auth_headers(client, "u1", "pw1")
+    assert auth is not None
+
+    r = _history_bot(client, 999, limit=50, auth_headers=auth)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = _send_bot(client, 999, "hello", auth_headers=auth)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = client.get("/bots/999/relationship", headers=auth)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = client.post(
+        "/games/gomoku/relationship-events",
+        json={"bot_id": 999, "relationship_events": ["user_win"]},
+        headers=auth,
+    )
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = client.post(
+        "/chat/build-prompt",
+        json={"bot_id": 999, "direction": "x"},
+        headers=auth,
+    )
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+
 def test_history_bot_new_bot_returns_empty_messages(client: TestClient):
     r = _register(client, "dn", "u1", "pw1")
     assert r.status_code == 200, r.text

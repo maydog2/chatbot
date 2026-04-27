@@ -1,0 +1,17 @@
+# NodePort so you can open http://localhost:30080/docs on Docker Desktop (Windows/Mac).
+# Change nodePort (30000–32767) if 30080 is busy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: companion-api
+  labels:
+    app: companion-api
+spec:
+  type: NodePort
+  selector:
+    app: companion-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30080

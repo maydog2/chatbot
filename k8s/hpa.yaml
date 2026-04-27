@@ -1,0 +1,24 @@
+# HorizontalPodAutoscaler — scales Deployment replicas by CPU when load rises.
+# Requires metrics-server and container CPU requests (set in deployment.yaml).
+# Apply after Deployment: kubectl apply -f k8s/hpa.yaml
+#
+# Verify metrics: kubectl top pods
+# Watch HPA:     kubectl get hpa companion-api -w
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: companion-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: companion-api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60

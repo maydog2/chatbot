@@ -1,9 +1,5 @@
 """
-companion/service/users.py — user registration and password verification.
-
-Public API:
-  register_user — create user row (per-bot relationship rows created when they add a bot)
-  login — verify username/password, return user_id or raise ValueError
+User account, profile, and display-name service operations.
 """
 from __future__ import annotations
 
@@ -41,3 +37,48 @@ def login(
         raise ValueError("invalid username or password")
 
     return user_id
+
+
+def effective_form_of_address(
+    explicit: str | None,
+    user_id: int,
+    conn: Optional[psycopg.Connection] = None,
+) -> str:
+    """
+    Text the model should use to address the user: per-bot form_of_address if set,
+    otherwise the user's profile display_name (nickname). Empty explicit falls through to display_name.
+    """
+    s = (explicit or "").strip()
+    if s:
+        return s
+    return (db.get_display_name(user_id, conn=conn) or "").strip()
+
+
+def get_display_name(
+    user_id: int,
+    conn: Optional[psycopg.Connection] = None,
+) -> str | None:
+    return db.get_display_name(user_id, conn=conn)
+
+
+def get_me(user_id: int, conn: Optional[psycopg.Connection] = None) -> dict:
+    display_name = db.get_display_name(user_id, conn=conn) or ""
+    avatar = db.get_user_avatar_data_url(user_id, conn=conn)
+    return {"display_name": display_name, "avatar_data_url": avatar}
+
+
+def update_me(
+    user_id: int,
+    *,
+    display_name: str | None = None,
+    avatar_data_url: str | None = None,
+    update_display_name: bool = False,
+    update_avatar: bool = False,
+    conn: Optional[psycopg.Connection] = None,
+) -> dict:
+    if update_display_name:
+        assert display_name is not None
+        db.update_user_display_name(user_id, display_name, conn=conn)
+    if update_avatar:
+        db.update_user_avatar_data_url(user_id, avatar_data_url, conn=conn)
+    return get_me(user_id, conn=conn)
