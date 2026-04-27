@@ -64,18 +64,68 @@ After changing this variable, **redeploy** the frontend so the value is baked in
 |----------|----------|-------------|
 | `DB_URL` | Yes | Neon PostgreSQL connection string |
 | `AUTH_TOKEN_SECRET` | Yes | Long random secret used to sign auth tokens |
-| `OPENAI_API_KEY` | Yes* | API key for chat (OpenAI, Groq `gsk_...`, etc.) |
-| `OPENAI_BASE_URL` | Optional | Set to Groq when using Groq: `https://api.groq.com/openai/v1` |
-| `OPENAI_MODEL` | Optional | Model id (provider-specific) |
+| `RESPAN_API_KEY` | Yes* | Preferred API key for chat through Respan Gateway |
+| `RESPAN_MODEL` | Optional | Respan model id, e.g. `gpt-4o-mini` |
+| `RESPAN_BASE_URL` | Optional | Respan Gateway override; defaults to `https://api.respan.ai/api/` |
+| `OPENAI_API_KEY` | Yes* | Fallback API key for direct OpenAI-compatible providers (OpenAI, Groq `gsk_...`, etc.) |
+| `OPENAI_BASE_URL` | Optional | Set when using a direct fallback provider, e.g. Groq: `https://api.groq.com/openai/v1` |
+| `OPENAI_MODEL` | Optional | Fallback model id (provider-specific) |
 | `CORS_ALLOW_ORIGINS` | Yes (prod) | Comma-separated browser origins allowed to call the API (see below) |
 | `CHATBOT_LOG_INITIATIVE` | Optional | `1` / `true` to log initiative diagnostics |
 | `CHATBOT_LOG_GOMOKU_SUMMARY` | Optional | `1` / `true` to log client `position_summary` JSON during Gomoku side-chat |
 | `CHATBOT_INITIATIVE_TONE_LLM` | Optional | Enable LLM-based tone hints for initiative |
 | `CHATBOT_TONE_MODEL` | Optional | Model for tone classifier |
 
-\*Required if you use endpoints that call the LLM; otherwise the API may start but chat features return errors.
+\*Set either `RESPAN_API_KEY` or `OPENAI_API_KEY` if you use endpoints that call the LLM; otherwise the API may start but chat features return errors.
 
 Render does **not** use a repo-root `.env` file for secrets; set everything in the Render **Environment** UI.
+
+---
+
+## Respan Gateway Configuration
+
+The backend is wired to prefer **Respan Gateway** for LLM calls. Respan's gateway is OpenAI-compatible, so the app uses the OpenAI Python SDK while pointing it at Respan's base URL.
+
+Minimum local `.env` values for Respan-backed chat:
+
+```env
+DB_URL=postgresql://...
+AUTH_TOKEN_SECRET=change-me
+RESPAN_API_KEY=...
+RESPAN_MODEL=gpt-4o
+```
+
+By default, `RESPAN_API_KEY` sends chat completions to:
+
+```text
+https://api.respan.ai/api/
+```
+
+Optional overrides:
+
+- `RESPAN_MODEL` sets the main chat model. If unset, the backend falls back to `OPENAI_MODEL` or `gpt-4o`.
+- `RESPAN_BASE_URL` overrides the default Respan Gateway base URL.
+- `RESPAN_TONE_MODEL` and `RESPAN_RELATIONSHIP_MODEL` can override the smaller auxiliary LLM calls used for tone hints and relationship trigger classification.
+
+If you use OpenAI models through Respan, make sure the Respan project has either provider credentials configured in **Settings -> Providers** or credits available in **Settings -> Credits**. Otherwise Respan may return an upstream `401` for models such as `gpt-4o`.
+
+### Verify Respan Locally
+
+From the repository root, after saving `.env`:
+
+```powershell
+$env:PYTHONPATH = "$PWD\src"
+python -c "from dotenv import load_dotenv; load_dotenv(override=True); from companion.infra import llm; print(llm._base_url()); print(llm._main_model()); print(llm.get_reply([{'role':'user','content':'Reply with exactly: respan-ok'}]))"
+```
+
+Expected signs that the request is going through Respan:
+
+```text
+https://api.respan.ai/api/
+gpt-4o
+```
+
+You can also check the Respan dashboard metrics/logs for a new request. A `401 upstream_provider_error` usually means the Respan API key was accepted, but the selected upstream model still needs provider credentials or credits configured in Respan.
 
 ---
 
@@ -169,7 +219,7 @@ If the frontend shows **Failed to fetch** but the API works in `/docs`, CORS is 
 | `401` on login | Wrong password or user only exists in another DB | Register on production or align `DB_URL` with the DB where the user was created |
 | Slow first request | Render free-tier cold start | Normal; retry after a few seconds |
 | DB connection errors | Wrong `DB_URL`, SSL params, or Neon paused | Verify string in Neon dashboard; ensure `sslmode=require` |
-| LLM errors | Missing `OPENAI_API_KEY` or wrong `OPENAI_BASE_URL` for Groq | Set keys in Render; for Groq set base URL and model |
+| LLM errors | Missing `RESPAN_API_KEY` / `OPENAI_API_KEY`, wrong base URL, or unavailable model | Set keys in Render; for Respan the default base URL is `https://api.respan.ai/api/`; for Groq set base URL and model |
 
 ---
 

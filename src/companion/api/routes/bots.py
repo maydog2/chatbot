@@ -43,8 +43,8 @@ def create_bot(
         raise _bot_value_error_to_http(e)
     except RuntimeError as e:
         msg = str(e)
-        if "OPENAI_API_KEY is not set" in msg:
-            raise HTTPException(status_code=503, detail="AI chat not configured (set OPENAI_API_KEY).")
+        if "RESPAN_API_KEY or OPENAI_API_KEY is not set" in msg:
+            raise HTTPException(status_code=503, detail="AI chat not configured (set RESPAN_API_KEY or OPENAI_API_KEY).")
         raise HTTPException(status_code=503, detail=msg)
 
 

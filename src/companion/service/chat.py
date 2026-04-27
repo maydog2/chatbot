@@ -154,11 +154,10 @@ def get_reply_for_custom_bot(
             logger.warning("get_reply_for_custom_bot: LLM returned empty content")
         return text
     except AuthenticationError:
-        logger.exception("get_reply_for_custom_bot: OpenAI API key invalid or revoked (401)")
+        logger.exception("get_reply_for_custom_bot: LLM API key invalid or revoked (401)")
         raise RuntimeError(
-            "OPENAI_API_KEY was rejected by OpenAI (401 invalid_api_key). "
-            "Create a new secret key at https://platform.openai.com/api-keys , paste the full sk-... string "
-            "(no spaces or quotes), clear OPENAI_BASE_URL when using api.openai.com, then restart uvicorn."
+            "The configured LLM API key was rejected (401 invalid_api_key). "
+            "Check RESPAN_API_KEY or OPENAI_API_KEY, verify the matching base URL/model, then restart uvicorn."
         ) from None
     except Exception:
         logger.exception("get_reply_for_custom_bot: LLM call failed (see traceback below)")
