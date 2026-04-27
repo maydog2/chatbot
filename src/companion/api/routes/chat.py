@@ -60,8 +60,8 @@ def send_bot_message(
         raise _value_error_to_http(e)
     except RuntimeError as e:
         msg = str(e)
-        if "RESPAN_API_KEY or OPENAI_API_KEY is not set" in msg:
-            raise HTTPException(status_code=503, detail="AI chat not configured (set RESPAN_API_KEY or OPENAI_API_KEY).")
+        if "OPENAI_API_KEY is not set" in msg:
+            raise HTTPException(status_code=503, detail="AI chat not configured (set OPENAI_API_KEY).")
         raise HTTPException(status_code=503, detail=msg)
 
 
@@ -106,8 +106,8 @@ def reply(
         return {"assistant_reply": assistant_reply}
     except RuntimeError as e:
         msg = str(e)
-        if "RESPAN_API_KEY or OPENAI_API_KEY is not set" in msg:
-            raise HTTPException(status_code=503, detail="AI chat not configured (set RESPAN_API_KEY or OPENAI_API_KEY).")
+        if "OPENAI_API_KEY is not set" in msg:
+            raise HTTPException(status_code=503, detail="AI chat not configured (set OPENAI_API_KEY).")
         raise HTTPException(status_code=503, detail=msg)
 
 

@@ -377,24 +377,14 @@ def classify_triggers_llm(user_message: str, assistant_message: str) -> list[str
         logger.warning("openai not installed; skipping relationship trigger classification")
         return []
 
-    respan_key = (os.getenv("RESPAN_API_KEY") or "").strip()
-    key = (respan_key or os.getenv("OPENAI_API_KEY") or "").strip()
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not key:
         return []
 
-    base_url = (
-        os.getenv("RESPAN_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or ("https://api.respan.ai/api/" if respan_key else "")
-    ).strip() or None
+    base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or None
     client = OpenAI(api_key=key, base_url=base_url)
     default_model = "llama-3.3-70b-versatile" if base_url and "groq.com" in base_url else "gpt-4o-mini"
-    model = (
-        os.getenv("RESPAN_RELATIONSHIP_MODEL")
-        or os.getenv("RESPAN_MODEL")
-        or os.getenv("OPENAI_MODEL")
-        or default_model
-    ).strip()
+    model = (os.getenv("OPENAI_MODEL") or default_model).strip()
 
     try:
         resp = client.chat.completions.create(

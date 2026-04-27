@@ -30,7 +30,7 @@ A full-stack AI companion chat platform with persistent sessions, customizable b
 - **bcrypt** — password hashing
 
 ### AI
-- **OpenAI Python SDK** — chat completions via **OpenAI-compatible** endpoints (Respan Gateway, OpenAI, Groq, etc.)
+- **OpenAI Python SDK** — chat completions via **OpenAI-compatible** endpoints (OpenAI, Groq, etc.)
 
 ### Configuration
 - **python-dotenv** — load repo-root `.env` locally (not required on hosts that inject env vars)
@@ -51,33 +51,6 @@ A full-stack AI companion chat platform with persistent sessions, customizable b
 - **Relationship-aware responses** — Replies incorporate persistent companion state, including trust, resonance, affection, openness, mood, interests, and initiative.
 - **Gomoku minigame** — In-game side chat uses the same bot session for persistence; relationship metrics can also refresh immediately during the game.
 - **LLM provider support** — Integrate with OpenAI-compatible chat providers using configurable model and endpoint settings.
-
-## Respan Integration
-
-The backend calls LLMs through **Respan Gateway** using OpenAI-compatible chat completions. The main chat flow is:
-
-```text
-User sends message
-    ↓
-FastAPI builds companion prompt
-    ↓
-Attach relationship-state metadata
-    ↓
-Call LLM through Respan Gateway
-    ↓
-Run local role-consistency evaluator
-    ↓
-Return response
-```
-
-Key implementation paths:
-
-- `src/companion/api/routes/chat.py` — FastAPI chat routes
-- `src/companion/service/chat.py` — prompt assembly and chat-turn orchestration
-- `src/companion/infra/llm.py` — Respan/OpenAI-compatible gateway client
-- `src/companion/service/persona_guard.py` — local role-consistency checks and rewrite instructions
-
-For environment variables, deployment setup, and gateway verification, see `docs/DEPLOYMENT.md`.
 
 ## Project Structure
 
@@ -109,7 +82,7 @@ The commands in this section are **Windows PowerShell** (path separators, `Activ
 
 - **Python 3.11+** (recommended) and **Node.js 18+**
 - A running **PostgreSQL** instance and a connection string (`DB_URL`)
-- A **Respan Gateway** API key (`RESPAN_API_KEY`) or another **OpenAI-compatible** API key if you want LLM replies
+- An **OpenAI-compatible** API key (OpenAI, Groq, etc.) if you want LLM replies
 
 ### 1) Backend API
 
@@ -121,7 +94,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and set at least **`DB_URL`**, **`AUTH_TOKEN_SECRET`**, and an LLM provider key such as **`RESPAN_API_KEY`**. See `docs/DEPLOYMENT.md` for the full Respan Gateway configuration.
+Copy `.env.example` to `.env` and set at least **`DB_URL`** and **`AUTH_TOKEN_SECRET`**, plus LLM variables (`OPENAI_API_KEY`, and `OPENAI_BASE_URL` / `OPENAI_MODEL` when using non-default providers).
 
 Initialize the schema once (empty database):
 

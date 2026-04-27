@@ -586,7 +586,7 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 - **History:** `POST /chat/history/bot` with unknown `bot_id` for the user → **200**, `"messages": []`.
 - **Send message:** wrong `bot_id` → **400**, `detail`: `"bot not found"`.
 - **Relationship:** invalid `bot_id` may surface as **500** if the stack raises **`ValueError`** without an **`HTTPException`** wrapper.
-- **LLM / config:** missing **`RESPAN_API_KEY`** / **`OPENAI_API_KEY`** is often handled inside **`get_reply_for_custom_bot`** with a fallback assistant string → **200** on **send-bot-message** / **reply** in those cases, rather than **503**.
+- **LLM / config:** missing **`OPENAI_API_KEY`** is often handled inside **`get_reply_for_custom_bot`** with a fallback assistant string → **200** on **send-bot-message** / **reply** in those cases, rather than **503**.
 - **503** on LLM routes: some propagated **`RuntimeError`** paths (e.g. invalid API key); see **`except RuntimeError`** on chat (and create-bot) in `companion/api.py`.
 - **Games:** **POST /games/gomoku/relationship-events** does not call the LLM; failures are usually **422** (validation) or depend on DB/bot resolution like other authenticated bot-scoped routes.
 
@@ -594,7 +594,7 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 
 - The **effective** model system prompt for **POST /chat/send-bot-message** is rebuilt server-side from the bot’s **`direction`**, relationship metrics, interests, initiative, addressing, etc. The **`system_prompt`** field in the request body is **not** the sole source for the actual LLM call (compatibility field; implementation ignores it for the real turn prompt).
 - **POST /chat/build-prompt** uses the authenticated user’s **first** bot for relationship context when composing text; it does not call the LLM.
-- **Provider:** model, base URL, and behavior follow **`RESPAN_API_KEY`** / **`RESPAN_MODEL`** first, then fallback **`OPENAI_API_KEY`**, optional **`OPENAI_BASE_URL`**, **`OPENAI_MODEL`**, etc.; output is non-deterministic across providers and runs.
+- **Provider:** model, base URL, and behavior follow **`OPENAI_API_KEY`**, optional **`OPENAI_BASE_URL`**, **`OPENAI_MODEL`**, etc.; output is non-deterministic across providers and runs.
 - **Minigame (`ephemeral_game`):** the server appends **Gomoku** constraints and, when provided, a **board-analysis** block from **`position_summary`** so the model does not contradict the client-held game state. Relationship deltas from **`relationship_events`** / **`position_summary`** may be applied on that turn (in addition to the usual post-reply trigger classifier).
 
 ## Appendix D — Debug and unstable fields

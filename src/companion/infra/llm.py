@@ -6,15 +6,12 @@ Public API:
   classify_user_tone_for_initiative(...) — one JSON call: (hostile, warm) hints for initiative nudges only
 
 Internal:
-  _client() — lazy OpenAI client from env (RESPAN_API_KEY or OPENAI_API_KEY)
+  _client() — lazy OpenAI client from env (OPENAI_API_KEY, optional OPENAI_BASE_URL, OPENAI_MODEL)
 
 Env:
-  RESPAN_API_KEY — preferred for Respan Gateway chat
-  RESPAN_BASE_URL — optional override (default https://api.respan.ai/api/ when RESPAN_API_KEY is set)
-  RESPAN_MODEL — optional Respan model override
-  OPENAI_API_KEY — fallback for direct OpenAI-compatible providers
-  OPENAI_BASE_URL — optional fallback base URL (e.g. OpenRouter, Groq)
-  OPENAI_MODEL — optional fallback model override (default gpt-4o in code)
+  OPENAI_API_KEY — required for chat
+  OPENAI_BASE_URL — optional (e.g. OpenRouter, Groq)
+  OPENAI_MODEL — optional override (default gpt-4o in code)
   OPENAI_MAX_TOKENS — optional main reply token cap (default 1024)
   OPENAI_TIMEOUT_SECONDS — optional OpenAI client timeout
   CHATBOT_TONE_MODEL — model for tone classifier (default gpt-4o-mini); CHATBOT_HOSTILITY_MODEL still accepted as alias
@@ -52,7 +49,6 @@ _TONE_CLASSIFIER_SYSTEM_PROMPT = (
 _CACHED_CLIENT: Any | None = None
 _CACHED_CLIENT_CONFIG: _ClientConfig | None = None
 _CLIENT_LOCK = Lock()
-_RESPAN_DEFAULT_BASE_URL = "https://api.respan.ai/api/"
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -78,7 +74,7 @@ def _positive_float_env(name: str) -> float | None:
 
 
 def _main_model() -> str:
-    return (os.getenv("RESPAN_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
+    return (os.getenv("OPENAI_MODEL") or "gpt-4o").strip()
 
 
 def _main_max_tokens() -> int:
@@ -87,28 +83,10 @@ def _main_max_tokens() -> int:
 
 def _tone_model() -> str:
     return (
-        os.getenv("RESPAN_TONE_MODEL")
-        or os.getenv("CHATBOT_TONE_MODEL")
+        os.getenv("CHATBOT_TONE_MODEL")
         or os.getenv("CHATBOT_HOSTILITY_MODEL")
-        or os.getenv("RESPAN_MODEL")
         or "gpt-4o-mini"
     ).strip()
-
-
-def _api_key() -> str:
-    return (os.getenv("RESPAN_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
-
-
-def _base_url() -> str | None:
-    respan_key = (os.getenv("RESPAN_API_KEY") or "").strip()
-    explicit = (
-        os.getenv("RESPAN_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or ""
-    ).strip()
-    if explicit:
-        return explicit
-    return _RESPAN_DEFAULT_BASE_URL if respan_key else None
 
 
 def _client() -> Any:
@@ -116,10 +94,10 @@ def _client() -> Any:
 
     from openai import OpenAI
 
-    key = _api_key()
+    key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not key:
-        raise RuntimeError("RESPAN_API_KEY or OPENAI_API_KEY is not set. Set one to use AI chat.")
-    base_url = _base_url()
+        raise RuntimeError("OPENAI_API_KEY is not set. Set it to use AI chat.")
+    base_url = (os.getenv("OPENAI_BASE_URL") or "").strip() or None
     timeout = _positive_float_env("OPENAI_TIMEOUT_SECONDS")
     config = (key, base_url, timeout)
     if _CACHED_CLIENT is not None and _CACHED_CLIENT_CONFIG == config:
