@@ -24,6 +24,7 @@ A full-stack AI companion chat platform with persistent sessions, customizable b
 
 ### Data
 - **PostgreSQL**
+- **pgvector** — semantic memory embeddings and similarity search
 
 ### Auth & security
 - **Bearer token** session model (signed tokens)
@@ -48,9 +49,10 @@ A full-stack AI companion chat platform with persistent sessions, customizable b
 - **Authentication** — Register, log in, and use bearer-token-based sessions with optional remember-me support.
 - **Companion management** — Create and manage multiple bots per account, each with its own persona, interests, initiative level, avatar, and persistent conversation history.
 - **Persistent conversations** — Resume chats across visits with durable session and message storage.
+- **Long-term memory** — Extract durable user preferences, goals, background facts, and instructions after each turn; retrieve relevant active memories with pgvector and inject them into future prompts.
 - **Relationship-aware responses** — Replies incorporate persistent companion state, including trust, resonance, affection, openness, mood, interests, and initiative.
 - **Gomoku minigame** — In-game side chat uses the same bot session for persistence; relationship metrics can also refresh immediately during the game.
-- **LLM provider support** — Integrate with OpenAI-compatible chat providers using configurable model and endpoint settings.
+- **LLM provider support** — Integrate with OpenAI-compatible chat and embedding providers using configurable model and endpoint settings.
 
 ## Project Structure
 
@@ -81,7 +83,7 @@ The commands in this section are **Windows PowerShell** (path separators, `Activ
 ### Prerequisites
 
 - **Python 3.11+** (recommended) and **Node.js 18+**
-- A running **PostgreSQL** instance and a connection string (`DB_URL`)
+- A running **PostgreSQL** instance with the **pgvector** extension available, plus a connection string (`DB_URL`)
 - An **OpenAI-compatible** API key (OpenAI, Groq, etc.) if you want LLM replies
 
 ### 1) Backend API
@@ -135,9 +137,21 @@ pytest -q
 
 (`tests/conftest.py` expects a local `companion_test` database by default—configure `TEST_DB_URL` if needed.)
 
+## Long-Term Memory Notes
+
+Long-term memory is maintained server-side. During `POST /chat/send-bot-message`, the backend first retrieves relevant active memories for the current user and includes them in the effective prompt. After the assistant reply is saved, a background task extracts new memory candidates from the latest user turn, deduplicates them by normalized text and embedding similarity, stores embeddings, and enforces per-user limits of 100 active memories and 1000 total memories.
+
+Useful local diagnostics:
+
+```powershell
+python scripts/check_migrations.py
+python scripts/show_memories.py
+python scripts/apply_migration.py 015_create_memories.sql
+```
+
 ## Known Limitations
 
 - Relationship-state updates are heuristic and still being tuned.
-- No long-term semantic memory yet; the system persists chat history and relationship/session signals, but does not currently use retrieval-augmented memory.
+- Long-term memory extraction depends on LLM output quality and embeddings; ambiguous turns may produce no memory, and semantic dedupe is threshold-based rather than perfect.
 - Guardrails and evaluation coverage for adversarial or edge-case prompts are still limited; response safety and consistency currently rely primarily on prompt design and application-level constraints..
 - Single-region, cloud-dependent deployment; cold starts and network latency across Render, Vercel, and the database provider may affect responsiveness.

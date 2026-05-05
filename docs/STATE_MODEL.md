@@ -26,7 +26,7 @@ Compared with a plain “system prompt + history” chatbot, this stack **feeds 
 - **Not** a real-time emotion detector or psychological instrument.
 - **Not** a psychologically validated user model.
 - **Not** learned personalization (no fine-tuned companion model from user data).
-- **Not** long-term **semantic** memory (no RAG / vector recall of “everything we ever said” in this design).
+- **Not** raw transcript recall. Long-term memory stores selected durable facts/preferences, not every prior line of conversation.
 - **Not** guaranteed consistency across different LLM providers or model versions—wording and compliance still vary.
 
 ## 3. State Dimensions
@@ -87,6 +87,7 @@ These are **not** the numeric relationship metrics, but they **ship on the same 
 - **Bot** — persona text, name, avatar, **interests**, **initiative** setting, **form of address**, **direction**; each bot has its own **chat transcript** (messages) in a dedicated session.
 - **Relationship state** — **one row per (user, bot)** for trust, resonance, affection, openness, mood label, plus internal mood axes and bookkeeping (bias, previous turn’s triggers for decay rules). This is what people usually mean by “how we’re doing with *this* bot.”
 - **Messages** — ordered turns (user/assistant); **not** the same object as relationship state, but both are read when building a reply.
+- **Memories** — selected user-scoped facts extracted from completed chat turns, such as preferences, goals, background details, or instructions. They are separate from relationship state and can be active/inactive.
 
 **Boundary:** Clients may send **small optional deltas** for trust/resonance on a chat turn; the server still applies its own **trigger-based** updates afterward. The **backend remains the source of truth** for how those combine and clamp.
 
@@ -101,9 +102,11 @@ These are **not** the numeric relationship metrics, but they **ship on the same 
 1. **Optional client deltas** — If the client sends trust/resonance adjustments with the message, the server applies them first (and, on that path, keeps affection/openness **in sync** with those deltas in the current implementation).
 2. **User message persisted** — Transcript used for context and for later classification.
 3. **Pre-reply relationship pass** — Applies **time-based drift** on internal mood axes and persists updated axes; **mood label** stays unless this pass included trigger-driven nudges (usually none here before the classifier runs).
-4. **Prompt build** — Uses **current** trust/resonance/affection/openness/mood plus bot persona, interests, initiative-derived instructions, vocative lines, etc.
-5. **Assistant reply generated** — Model produces text; light **post-processing** may adjust shape (e.g. initiative-related closing-question rules).
-6. **Post-reply trigger pass** — User + assistant text are sent to a **classifier** that returns a small list of **trigger ids** (e.g. gratitude, apology, harsh rebuke). Effects are **aggregated** (caps per turn, dampening if mood is Irritated, skipping some repeats from the prior turn). Resulting deltas update the four stats; **mood override** or **mood nudge** may change the **mood label** subject to **inertia** (minimum time between label changes).
+4. **Memory retrieval** — Uses the latest user message to retrieve relevant active long-term memories for the same user. Retrieval prefers pgvector top-k similarity when embeddings are available and falls back to importance/recency.
+5. **Prompt build** — Uses **current** trust/resonance/affection/openness/mood plus bot persona, interests, initiative-derived instructions, vocative lines, relevant memories, etc.
+6. **Assistant reply generated** — Model produces text; light **post-processing** may adjust shape (e.g. initiative-related closing-question rules).
+7. **Post-reply trigger pass** — User + assistant text are sent to a **classifier** that returns a small list of **trigger ids** (e.g. gratitude, apology, harsh rebuke). Effects are **aggregated** (caps per turn, dampening if mood is Irritated, skipping some repeats from the prior turn). Resulting deltas update the four stats; **mood override** or **mood nudge** may change the **mood label** subject to **inertia** (minimum time between label changes).
+8. **Background memory extraction** — After the chat turn commits, a separate LLM call extracts new long-term memory candidates from the latest user message, using recent context only for disambiguation. Exact/semantic duplicates are updated, replacement-like memories deactivate old rows, and per-user memory caps are enforced.
 
 Disabled or failed classifier → **no triggers** for that turn; stats may still have changed earlier from client deltas or the pre-reply pass.
 
@@ -128,6 +131,7 @@ Between chat turns, **elapsed real time** nudges internal mood axes toward **per
 - **Mood** — switches **macro tone** (brief vs. expansive, playful vs. withdrawn, irritated vs. calm) via playbook text; **Irritated** also alters how strongly positive trigger deltas apply.
 - **Interests** — bias topical examples and dynamic nudges; help decide if the user’s turn “matches” the bot’s themes for initiative.
 - **Initiative** — changes **how much** the bot is asked to steer, extend, or hold back, including optional **post-processing** on the draft reply.
+- **Long-term memories** — add a compact prompt block with relevant active user facts. They are retrieved before generation; new memories from the current turn are extracted afterward and affect later turns, not the reply currently being generated.
 
 If prompts and models drift, **the same numbers** can produce **different** surface behavior—that’s expected.
 
@@ -150,7 +154,7 @@ User returns after hours or days: internal axes **relax** toward baseline before
 - All deltas and triggers are **hand-authored** and **still tunable**; behavior will change as rules change.
 - Numbers are **not** psychometric measures; don’t interpret them as ground truth about people.
 - **Classifier** quality and LLM **compliance** vary by provider/model; the same state may read differently on different stacks.
-- **Message history** is linear transcript only—no retrieval over long semantic memory.
+- **Long-term memory** is selective and threshold-based: it can miss useful facts, keep imperfect duplicates, or fail when the extractor/embedding provider is unavailable.
 - Some effects are **indirect** (prompt phrasing + light post-process), so failures are **soft** (the model can ignore instructions).
 - **Debug** fields (e.g. initiative snapshots) exist for development; they are **not** a stable external contract.
 
@@ -161,5 +165,5 @@ Possible directions (not commitments):
 - Calibrate trigger sets and caps with clearer evaluation or A/B hooks.
 - Richer **decay** or **cooldown** rules between moods and stats.
 - Stronger **evaluation** around tone continuity and safety boundaries.
-- Optional **retrieval-backed** memory for facts/topics beyond raw transcript window.
+- Better memory review/editing tools so users can inspect and correct stored facts directly from the UI.
 - Better **transparency** tooling (explain “why mood moved” from trigger ids for authors and power users).

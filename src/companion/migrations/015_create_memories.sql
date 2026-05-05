@@ -1,4 +1,4 @@
-012_bot_personalityCREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS memories (
   id                BIGSERIAL PRIMARY KEY,

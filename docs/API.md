@@ -280,7 +280,7 @@ Deletes the bot and its session (messages cascade).
 
 #### POST /chat/send-bot-message
 
-Main chat: **saves** the user message, **calls the LLM**, **saves** the assistant reply, updates relationship/mood logic server-side; returns `assistant_reply` and metrics.
+Main chat: **saves** the user message, retrieves relevant long-term memories, **calls the LLM**, **saves** the assistant reply, updates relationship/mood logic server-side, and schedules background memory extraction; returns `assistant_reply` and metrics.
 
 **Authentication:** Required.
 
@@ -349,6 +349,7 @@ Optional **`ephemeral_game`** (Gomoku side-chat while playing): same top-level f
 **Notes**
 
 - **400** if `bot_id` is not owned by the user.
+- Long-term memory retrieval happens before generation. New memories extracted from this turn are stored afterward in a background task, so they affect later turns rather than the current reply.
 - **With `ephemeral_game`:** the **current** user message and **assistant** reply are still **written** to the bot’s normal **`messages`** transcript (same `session_id` as without a minigame). The effective LLM transcript is built from **persisted** history; `game_messages` is **not** re-appended to the model input (avoids duplicating lines once they are stored).
 - Prompt construction, minigame constraints, and debug-only fields: [Appendix C](#appendix-c--prompts-llm-and-send-bot-message) and [Appendix D](#appendix-d--debug-and-unstable-fields).
 
@@ -592,7 +593,9 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 
 ## Appendix C — Prompts, LLM, and `send-bot-message`
 
-- The **effective** model system prompt for **POST /chat/send-bot-message** is rebuilt server-side from the bot’s **`direction`**, relationship metrics, interests, initiative, addressing, etc. The **`system_prompt`** field in the request body is **not** the sole source for the actual LLM call (compatibility field; implementation ignores it for the real turn prompt).
+- The **effective** model system prompt for **POST /chat/send-bot-message** is rebuilt server-side from the bot’s **`direction`**, relationship metrics, interests, initiative, addressing, relevant active long-term memories, etc. The **`system_prompt`** field in the request body is **not** the sole source for the actual LLM call (compatibility field; implementation ignores it for the real turn prompt).
+- Long-term memory retrieval is user-scoped and active-only. When embeddings are available, the backend uses pgvector top-k search; otherwise it falls back to importance/recency ordering.
+- Memory extraction is asynchronous relative to the HTTP response path. The extractor only creates memory candidates from the latest user message and uses recent context for disambiguation, not for re-extracting old facts.
 - **POST /chat/build-prompt** uses the authenticated user’s **first** bot for relationship context when composing text; it does not call the LLM.
 - **Provider:** model, base URL, and behavior follow **`OPENAI_API_KEY`**, optional **`OPENAI_BASE_URL`**, **`OPENAI_MODEL`**, etc.; output is non-deterministic across providers and runs.
 - **Minigame (`ephemeral_game`):** the server appends **Gomoku** constraints and, when provided, a **board-analysis** block from **`position_summary`** so the model does not contradict the client-held game state. Relationship deltas from **`relationship_events`** / **`position_summary`** may be applied on that turn (in addition to the usual post-reply trigger classifier).

@@ -4,7 +4,7 @@
 
 First time wiring everything up? Do it in this order, then use the sections below for commands, env var names, and troubleshooting.
 
-1. **Create a Neon database** — copy the pooled `DB_URL`.
+1. **Create a Neon database** — copy the pooled `DB_URL` and make sure pgvector is available.
 2. **Deploy the backend on Render** — Web Service from this repo, root = repo root, start command with `PYTHONPATH=src` + Uvicorn (see [Backend Deployment](#backend-deployment)).
 3. **Set backend environment variables** on Render — at minimum `DB_URL`, `AUTH_TOKEN_SECRET`, and LLM-related keys; run **`init_db` once** against Neon before relying on the UI (see [Database Configuration](#database-configuration)).
 4. **Deploy the frontend on Vercel** — same repo, **Root Directory = `frontend`**, turn **off** “include files outside root” (see [Frontend Deployment](#frontend-deployment)).
@@ -67,9 +67,17 @@ After changing this variable, **redeploy** the frontend so the value is baked in
 | `OPENAI_API_KEY` | Yes* | API key for chat (OpenAI, Groq `gsk_...`, etc.) |
 | `OPENAI_BASE_URL` | Optional | Set to Groq when using Groq: `https://api.groq.com/openai/v1` |
 | `OPENAI_MODEL` | Optional | Model id (provider-specific) |
+| `CHATBOT_MEMORY_MODEL` | Optional | Model used to extract long-term memory JSON; `RESPAN_MEMORY_MODEL` is also accepted |
+| `OPENAI_EMBEDDING_MODEL` | Optional | Embedding model for long-term memory; defaults in code if omitted |
 | `CORS_ALLOW_ORIGINS` | Yes (prod) | Comma-separated browser origins allowed to call the API (see below) |
 | `CHATBOT_LOG_INITIATIVE` | Optional | `1` / `true` to log initiative diagnostics |
 | `CHATBOT_LOG_GOMOKU_SUMMARY` | Optional | `1` / `true` to log client `position_summary` JSON during Gomoku side-chat |
+| `CHATBOT_LOG_MEMORY` | Optional | `1` / `true` to log long-term memory extraction/retrieval diagnostics |
+| `CHATBOT_MEMORY_DEDUPE_SIMILARITY` | Optional | Cosine-similarity threshold for semantic memory dedupe; default `0.88` |
+| `CHATBOT_PROMPT_MEMORY_LIMIT` | Optional | Max active memories injected into a prompt; default `8` |
+| `CHATBOT_PROMPT_MEMORY_LINE_CHAR_LIMIT` | Optional | Per-memory prompt line truncation; default `240` |
+| `CHATBOT_ACTIVE_MEMORY_LIMIT` | Optional | Per-user active memory cap; default `100` |
+| `CHATBOT_TOTAL_MEMORY_LIMIT` | Optional | Per-user total memory cap; default `1000` |
 | `CHATBOT_INITIATIVE_TONE_LLM` | Optional | Enable LLM-based tone hints for initiative |
 | `CHATBOT_TONE_MODEL` | Optional | Model for tone classifier |
 
@@ -116,6 +124,8 @@ Render does **not** use a repo-root `.env` file for secrets; set everything in t
 
 **Neon setup (conceptual):** create a project/database in [Neon](https://neon.tech). Prefer the **pooled** connection string for server-side APIs. Keep **`sslmode=require`**. If you hit TLS / channel-binding issues on some clients, try Neon’s connection string variant **without** `channel_binding=require`.
 
+Long-term memory uses the PostgreSQL **pgvector** extension. Current `schema.sql` and migration `015_create_memories.sql` both run `CREATE EXTENSION IF NOT EXISTS vector;`.
+
 1. Copy **`DB_URL`** from Neon into Render’s environment (same value the API will use).
 2. From your machine (with `PYTHONPATH=src` and `DB_URL` set), run **once**:
 
@@ -128,6 +138,20 @@ Render does **not** use a repo-root `.env` file for secrets; set everything in t
 3. Do **not** run `init_db --reset` against production unless you intend to wipe data.
 
 Migrations for older databases are under `src/companion/migrations/`; new Neon databases created from current `schema.sql` via `init_db` usually do not need manual migration steps.
+
+For an existing database, check and apply migrations with the Python helper scripts:
+
+```bash
+python scripts/check_migrations.py
+python scripts/apply_migration.py 014_unique_bot_session.sql
+python scripts/apply_migration.py 015_create_memories.sql
+```
+
+To inspect stored long-term memories during troubleshooting:
+
+```bash
+python scripts/show_memories.py
+```
 
 ---
 
@@ -170,6 +194,8 @@ If the frontend shows **Failed to fetch** but the API works in `/docs`, CORS is 
 | Slow first request | Render free-tier cold start | Normal; retry after a few seconds |
 | DB connection errors | Wrong `DB_URL`, SSL params, or Neon paused | Verify string in Neon dashboard; ensure `sslmode=require` |
 | LLM errors | Missing `OPENAI_API_KEY` or wrong `OPENAI_BASE_URL` for Groq | Set keys in Render; for Groq set base URL and model |
+| Memory table missing | Existing DB has not applied `015_create_memories.sql` | Run `python scripts/check_migrations.py`, then apply the missing migration |
+| Memories do not appear in prompts | No active memories, embedding failure, or retrieval fallback path | Enable `CHATBOT_LOG_MEMORY=1`; verify `memories` rows with `scripts/show_memories.py` |
 
 ---
 

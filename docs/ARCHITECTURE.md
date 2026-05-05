@@ -11,7 +11,7 @@ The architecture follows a split full-stack model: a **Next.js** frontend for th
 ### Goals
 
 - **Product:** Deliver a usable companion chat product rather than a one-page LLM demo, with accounts, multiple customizable bots per user, persistent sessions, and durable message history.
-- **Stateful behavior:** Carry **relationship-style state** and bot-level configuration into prompting so replies stay aligned with each bot’s persona across many turns.
+- **Stateful behavior:** Carry **relationship-style state**, bot-level configuration, and relevant long-term memories into prompting so replies stay aligned with each bot’s persona and the user's durable preferences across many turns.
 - **Architecture:** Keep a clean split—**Next.js** for interaction, **FastAPI** for orchestration and rules, **PostgreSQL** for durability; integrate an **OpenAI-compatible** provider for generation without locking to one vendor’s API surface.
 - **Operations:** Stay deployable on common PaaS patterns (separate UI host, API host, managed DB) with configuration via environment variables and minimal secret sprawl in code.
 - **Quality:** Maintain automated tests around HTTP contracts and core services so refactors to prompts or state rules do not silently break users.
@@ -20,7 +20,7 @@ The architecture follows a split full-stack model: a **Next.js** frontend for th
 - **Distributed microservices:** The system is intentionally implemented as a relatively simple split full-stack application rather than a microservice architecture.
 - **Multi-region deployment:** Low-latency global replication and cross-region failover are not current goals.
 - **Advanced moderation / safety pipeline:** The project does not yet implement a comprehensive safety, red-teaming, or policy-enforcement layer.
-- **Long-term semantic memory:** The system persists chat history and companion state, but does not yet include retrieval-augmented memory or vector search.
+- **General-purpose knowledge base:** Long-term memory is scoped to user-specific companion facts and preferences. It is not a broad document RAG system or a replacement for transcript storage.
 - **Custom-trained personalization models:** Companion behavior is driven by prompting and heuristic state updates, not fine-tuned or user-specific learned models.
 - **High-scale real-time orchestration:** The architecture is designed for a deployable product/demo experience, not for large-scale concurrent chat workloads.
 
@@ -32,7 +32,7 @@ At runtime, the system is organized into four primary components:
 | --- | --- |
 | Frontend | **Next.js** web client for the user-facing interface, authentication flow, bot/profile management, and chat interaction. |
 | Backend API | **FastAPI** service for authentication, session/message APIs, companion-state management, and LLM orchestration. |
-| Database | **PostgreSQL** for durable users, bots, sessions, messages, and relationship state (often hosted on Neon in production). |
+| Database | **PostgreSQL** for durable users, bots, sessions, messages, relationship state, and pgvector-backed long-term memories (often hosted on Neon in production). |
 | LLM provider | **OpenAI-compatible HTTP API** used for assistant generation (for example, OpenAI, Groq, or other compatible providers). |
 
 **Typical production deployment:** Vercel (frontend), Render (backend), and Neon (database). See [Deployment](DEPLOYMENT.md).
@@ -65,10 +65,11 @@ Persistence lives in **PostgreSQL**. The app is organized around a small set of 
 | **Session** | Durable **message transcript** container: each **Bot** points at one **`session_id`** row, and that session holds the ordered **Messages** for that bot’s thread. **`POST /chat/end`** ends a **legacy per-user “active” session** (see `sessions.py`), not the normal lifecycle of a bot’s chat transcript. |
 | **Message** | A **persisted** turn in that session: **user** or **assistant** role and content, ordered in time. |
 | **Relationship state** | **Mutable** per-companion signals (e.g. trust, resonance, affection, openness, **mood**) maintained for a **(User, Bot)** pair; together with bot fields like **initiative**, they influence how prompts and replies are shaped—without listing every field here. |
+| **Memory** | User-scoped long-term facts extracted from chat turns: preferences, goals, background facts, and instructions. Active memories can carry embeddings for semantic retrieval and are capped per user. |
 
 **Who links to whom:** A **User** has many **Bots**. Each **Bot** drives one active **Session** model in the product (one conversation thread per bot in normal use). A **Session** has many **Messages**. **Relationship state** is associated with the **User + Bot** pair (the emotional/relational “stance” toward that companion), not with a single message row.
 
-**What stays durable:** Accounts, bot definitions, sessions, the message transcript, and relationship/companion state—so reloads, new devices (same account), and later turns can continue coherently. Anything not listed here (e.g. raw LLM provider logs) is generally **not** treated as a first-class persisted entity.
+**What stays durable:** Accounts, bot definitions, sessions, the message transcript, relationship/companion state, and selected long-term memories—so reloads, new devices (same account), and later turns can continue coherently. Anything not listed here (e.g. raw LLM provider logs) is generally **not** treated as a first-class persisted entity.
 
 ```
 User ── owns ──► Bot (many)
@@ -77,6 +78,8 @@ User ── owns ──► Bot (many)
                   │      └── Message (many; user / assistant)
                   │
                   └── Relationship state ◄── (User, Bot) metrics + mood
+
+User ── owns ──► Memory (many; active/inactive, optional embedding)
 ```
 
 ## 5. Key Request Flows
@@ -94,7 +97,7 @@ Tokens are opaque strings to the client; the UI stores them and attaches them to
 
 ### B. Chat message (send turn)
 
-Typical path: the client sends a chat turn for a specific bot. The backend authenticates the user, resolves the bot/session, persists the user message, builds model context from recent transcript and companion state, calls the LLM provider, stores the assistant reply, applies post-turn state updates, and returns the new reply plus refreshed relationship metrics.
+Typical path: the client sends a chat turn for a specific bot. The backend authenticates the user, resolves the bot/session, persists the user message, builds model context from recent transcript, companion state, and relevant active memories, calls the LLM provider, stores the assistant reply, applies post-turn state updates, and returns the new reply plus refreshed relationship metrics.
 
 Relationship-state updates may occur at multiple points in the turn pipeline: optional client-provided deltas, server-side updates derived from the latest user turn, and post-reply trigger rules after the assistant response is generated. Game-related interactions may also trigger relationship updates through dedicated endpoints.
 
@@ -102,12 +105,16 @@ Relationship-state updates may occur at multiple points in the turn pipeline: op
 2. **Resolve the bot and active session** — Load the bot for this user and identify the session backing that bot’s current conversation thread.
 3. **Persist the user turn** — Store the new user message and load recent transcript history for context construction.
 4. **Refresh companion state** — Apply turn-level relationship/state updates derived from the latest user input, along with any accepted client-provided deltas.
-5. **Build effective model input** — Compose the server-side prompt from durable bot/session state, recent transcript, and current relationship signals.
-6. **Call the LLM provider** — Send the effective prompt and transcript to the configured OpenAI-compatible API and receive the assistant response.
-7. **Post-process and persist the reply** — Apply reply cleanup or initiative-related shaping, then store the assistant message.
-8. **Apply post-turn state updates and respond** — Run reply-dependent trigger rules, read fresh relationship values, and return the new assistant reply plus updated companion state needed by the client UI.
+5. **Retrieve long-term memories** — Use the current user message as a semantic query, search that user's active embedded memories with pgvector top-k retrieval, and fall back to importance/recency ordering when needed.
+6. **Build effective model input** — Compose the server-side prompt from durable bot/session state, relevant memories, recent transcript, and current relationship signals.
+7. **Call the LLM provider** — Send the effective prompt and transcript to the configured OpenAI-compatible API and receive the assistant response.
+8. **Post-process and persist the reply** — Apply reply cleanup or initiative-related shaping, then store the assistant message.
+9. **Apply post-turn state updates and respond** — Run reply-dependent trigger rules, read fresh relationship values, and return the new assistant reply plus updated companion state needed by the client UI.
+10. **Extract memory in the background** — After the turn commits, a FastAPI background task asks the LLM to extract memory candidates only from the latest user message, deduplicates exact and embedding-similar memories, stores embeddings, and enforces per-user active/total memory limits.
 
 The HTTP handler runs inside a per-request database transaction (commit on success, rollback on failure), so a failed step rolls back the entire turn.
+
+Long-term memory extraction intentionally runs after the response path. A failed extraction should not fail the user's chat turn; it only means no new memory is stored for that exchange.
 
 ### C. History and companion state (read)
 
@@ -149,3 +156,9 @@ This section captures only system-shaping decisions. A decision is included only
 - **Decision:** Build the final LLM prompt on the backend from persisted bot state, relationship state, and chat history, instead of relying on client-provided prompt text alone.
 - **Why:** This ensures the model response is based on the real server-side state, while also enforcing ownership checks and backend rules in one place.
 - **Trade-offs:** It increases backend complexity and means prompt behavior changes usually require backend updates and deployment.
+
+### 6) Server-side long-term memory
+
+- **Decision:** Store selected user memories in PostgreSQL and use pgvector similarity search to retrieve only active, user-scoped, embedded rows for prompt injection.
+- **Why:** Recent transcript alone is a narrow context window. Durable memory lets the bot remember stable preferences and facts without replaying the whole chat history.
+- **Trade-offs:** Memory quality depends on extraction prompts, embedding quality, and deduplication thresholds. The system therefore keeps memory types narrow, caps active/total rows per user, and treats memory extraction failures as non-blocking.
