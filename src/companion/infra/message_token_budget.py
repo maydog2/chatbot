@@ -74,6 +74,8 @@ def clip_openai_messages_by_user_token_budget(
     p = 0
     while p < len(messages) and _user_token_sum(enc, messages[p:]) > max_user_tokens:
         p += 1
+    while 0 < p < len(messages) and (messages[p].get("role") or "") != "user":
+        p += 1
     out = [dict(m) for m in messages[p:]]
     if not out:
         last = messages[-1]

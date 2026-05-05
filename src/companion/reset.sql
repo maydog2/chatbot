@@ -1,6 +1,9 @@
 SET TIME ZONE 'UTC';
 
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Drop tables (also drops dependent indexes/triggers via CASCADE)
+DROP TABLE IF EXISTS memories CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
 DROP TABLE IF EXISTS bots CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
@@ -42,7 +45,8 @@ CREATE TABLE bots (
   secondary_interests JSONB NOT NULL DEFAULT '[]'::jsonb,
   initiative      TEXT NOT NULL DEFAULT 'medium' CHECK (initiative IN ('low', 'medium', 'high')),
   personality     TEXT NOT NULL DEFAULT 'gentle' CHECK (personality IN ('tsundere', 'playful', 'cool', 'gentle')),
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT bots_session_id_unique UNIQUE (session_id)
 );
 
 CREATE INDEX idx_bots_user_id ON bots(user_id);
@@ -61,6 +65,29 @@ CREATE INDEX idx_messages_user_created
 
 CREATE INDEX idx_messages_session_created
   ON messages(session_id, created_at ASC);
+
+CREATE TABLE memories (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  session_id        BIGINT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  source_message_id BIGINT REFERENCES messages(id) ON DELETE SET NULL,
+  content           TEXT NOT NULL CHECK (length(btrim(content)) > 0),
+  memory_type       TEXT NOT NULL CHECK (memory_type IN ('preference', 'goal', 'background', 'instruction')),
+  importance        INT NOT NULL DEFAULT 50 CHECK (importance BETWEEN 0 AND 100),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_active         BOOLEAN NOT NULL DEFAULT true,
+  embedding         vector
+);
+
+CREATE INDEX idx_memories_user_active
+  ON memories(user_id, is_active, importance DESC, updated_at DESC);
+
+CREATE INDEX idx_memories_session_created
+  ON memories(session_id, created_at DESC);
+
+CREATE INDEX idx_memories_source_message_id
+  ON memories(source_message_id);
 
 CREATE TABLE relationship_state (
   bot_id        BIGINT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
@@ -95,6 +122,11 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_relationship_state_updated_at
 BEFORE UPDATE ON relationship_state
+FOR EACH ROW
+EXECUTE PROCEDURE companion_set_updated_at();
+
+CREATE TRIGGER trg_memories_updated_at
+BEFORE UPDATE ON memories
 FOR EACH ROW
 EXECUTE PROCEDURE companion_set_updated_at();
 

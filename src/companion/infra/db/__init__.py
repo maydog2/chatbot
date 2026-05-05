@@ -14,6 +14,9 @@ Public API (aggregated from submodules; see each file for details):
   Bots: create_bot, get_bot, get_bots_by_user, update_bot, delete_bot,
     user_has_duplicate_bot_name, user_has_duplicate_bot_avatar
   Messages: create_message, get_messages_by_session
+  Memories: create_memory, update_memory, deactivate_memory, enforce_memory_limits,
+    list_active_memories, list_active_memories_for_retrieval, search_active_memories_by_embedding,
+    find_active_memories_for_dedupe
   Relationship: get_or_create_relationship, update_relationship_state,
     refresh_relationship_mood_for_elapsed_time, apply_relationship_turn_deltas
 
@@ -36,6 +39,16 @@ from .bots import (
     user_has_duplicate_bot_name,
 )
 from .internal import _MISSING, _secondary_interests_list
+from .memories import (
+    create_memory,
+    deactivate_memory,
+    enforce_memory_limits,
+    find_active_memories_for_dedupe,
+    list_active_memories,
+    list_active_memories_for_retrieval,
+    search_active_memories_by_embedding,
+    update_memory,
+)
 from .messages import create_message, get_messages_by_session
 from .pool import (
     DB_URL,
@@ -96,15 +109,19 @@ __all__ = [
     "create_auth_token",
     "create_bot",
     "create_message",
+    "create_memory",
     "create_session",
     "create_user",
     "delete_bot",
     "delete_user",
+    "deactivate_memory",
     "end_session",
+    "enforce_memory_limits",
     "ensure_bot_initiative_column",
     "ensure_bot_personality_column",
     "ensure_relationship_mood_state_v1",
     "get_active_session_id",
+    "find_active_memories_for_dedupe",
     "get_bot",
     "get_bots_by_user",
     "get_created_at",
@@ -119,9 +136,13 @@ __all__ = [
     "get_user_id",
     "get_user_id_by_token_hash",
     "init_pool",
+    "list_active_memories",
+    "list_active_memories_for_retrieval",
+    "search_active_memories_by_embedding",
     "refresh_relationship_mood_for_elapsed_time",
     "revoke_token_by_hash",
     "update_bot",
+    "update_memory",
     "update_relationship_state",
     "update_user_avatar_data_url",
     "update_user_display_name",

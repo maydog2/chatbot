@@ -170,34 +170,3 @@ def test_register_login_send_history_end_relationship_smoke(client: TestClient):
     assert "ended" in body
     assert isinstance(body["ended"], bool)
 
-
-def test_register_validation_422(client: TestClient):
-    # Missing required field: display_name
-    r = client.post("/users/register", json={"username": "u", "password": "p"})
-    assert r.status_code == 422
-
-
-def test_login_wrong_password_401(client: TestClient):
-    _register(client, "dn", "u1", "pw1")
-    r = client.post("/users/login", json={"username": "u1", "password": "wrong"})
-    assert r.status_code == 401
-
-
-def test_history_limit_default_and_type(client: TestClient):
-    _register(client, "dn", "u1", "pw123")
-    auth = _auth_headers(client, "u1", "pw123")
-    assert auth is not None
-    bot = _create_bot(client, auth)
-    bid = int(bot["id"])
-    _send_bot(client, bid, "m1", auth_headers=auth)
-    _send_bot(client, bid, "m2", auth_headers=auth)
-
-    # explicit limit
-    msgs = _history_bot(client, bid, limit=1, auth_headers=auth)
-    assert isinstance(msgs, list)
-    assert len(msgs) >= 1
-
-    r = client.post("/chat/history/bot", json={"bot_id": bid, "limit": 50}, headers=auth)
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert "messages" in body and isinstance(body["messages"], list)

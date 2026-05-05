@@ -11,6 +11,14 @@ def test_parse_tone_object_handles_string_false_values() -> None:
     assert llm._parse_tone_object('{"hostile": "false", "warm": "true"}') == (False, True)
 
 
+def test_memory_extractor_prompt_limits_extraction_to_latest_user_message() -> None:
+    prompt = llm._MEMORY_EXTRACTOR_SYSTEM_PROMPT
+
+    assert "latest user message" in prompt
+    assert "Use recent context only to disambiguate corrections or replacements" in prompt
+    assert "do not extract or repeat memories that appear only in recent context" in prompt
+
+
 def test_client_reuses_cached_openai_client_for_same_env(monkeypatch: pytest.MonkeyPatch) -> None:
     created: list[Any] = []
 

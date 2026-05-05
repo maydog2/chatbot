@@ -169,6 +169,18 @@ def test_send_rolls_back_when_second_create_message_throws(
         headers=auth,
     )
     assert rb.status_code == 200, rb.text
+    bot_id = int(rb.json()["id"])
+
+    rel_before_res = client.get(f"/bots/{bot_id}/relationship", headers=auth)
+    assert rel_before_res.status_code == 200, rel_before_res.text
+    rel_before = rel_before_res.json()
+    rel_snapshot_before = (
+        rel_before["trust"],
+        rel_before["resonance"],
+        rel_before["affection"],
+        rel_before["openness"],
+        rel_before["mood"],
+    )
 
     orig = db.create_message
     n = {"c": 0}
@@ -181,14 +193,36 @@ def test_send_rolls_back_when_second_create_message_throws(
 
     monkeypatch.setattr(db, "create_message", _wrap)
 
-    bot_id = int(rb.json()["id"])
     with TestClient(app, raise_server_exceptions=False) as c:
         r = _send_bot(c, bot_id, "hello", auth_headers=auth)
-        assert r.status_code >= 500, r.text
+        assert r.status_code == 503, r.text
+        assert r.json().get("detail") == "forced failure after first message insert"
 
         r = _history_bot(c, bot_id, limit=50, auth_headers=auth)
         assert r.status_code == 200, r.text
         assert r.json()["messages"] == []
+
+        rel_after_fail_res = c.get(f"/bots/{bot_id}/relationship", headers=auth)
+        assert rel_after_fail_res.status_code == 200, rel_after_fail_res.text
+        rel_after_fail = rel_after_fail_res.json()
+        rel_snapshot_after_fail = (
+            rel_after_fail["trust"],
+            rel_after_fail["resonance"],
+            rel_after_fail["affection"],
+            rel_after_fail["openness"],
+            rel_after_fail["mood"],
+        )
+        assert rel_snapshot_after_fail == rel_snapshot_before
+
+        monkeypatch.setattr(db, "create_message", orig)
+        ok = _send_bot(c, bot_id, "hello after fail", auth_headers=auth)
+        assert ok.status_code == 200, ok.text
+
+        r = _history_bot(c, bot_id, limit=50, auth_headers=auth)
+        assert r.status_code == 200, r.text
+        msgs = r.json()["messages"]
+        assert [m["role"] for m in msgs] == ["user", "assistant"]
+        assert [m["content"] for m in msgs] == ["hello after fail", "contract stub"]
 
 
 # -------------------------
@@ -197,6 +231,7 @@ def test_send_rolls_back_when_second_create_message_throws(
 def test_register_missing_field_returns_422(client: TestClient):
     r = client.post("/users/register", json={"username": "u", "password": "p"})
     assert r.status_code == 422
+    assert any("display_name" in err.get("loc", []) for err in r.json().get("detail", []))
 
 
 def test_history_bot_missing_bot_id_returns_422(client: TestClient):
@@ -205,6 +240,47 @@ def test_history_bot_missing_bot_id_returns_422(client: TestClient):
     assert auth is not None
     r = client.post("/chat/history/bot", json={"limit": 10}, headers=auth)
     assert r.status_code == 422
+    assert any("bot_id" in err.get("loc", []) for err in r.json().get("detail", []))
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("get", "/users/me", None),
+        ("patch", "/users/me", {"display_name": "x"}),
+        ("get", "/bots", None),
+        ("post", "/bots", {"name": "b", "direction": "x", "primary_interest": "anime"}),
+        ("get", "/bots/1/relationship", None),
+        ("patch", "/bots/1", {"name": "new_name"}),
+        ("delete", "/bots/1", None),
+        (
+            "post",
+            "/chat/send-bot-message",
+            {"bot_id": 1, "content": "hello", "system_prompt": "", "trust_delta": 0, "resonance_delta": 0},
+        ),
+        ("post", "/chat/history/bot", {"bot_id": 1, "limit": 10}),
+        ("post", "/chat/end", None),
+        ("post", "/chat/build-prompt", {"bot_id": 1, "direction": "x"}),
+        (
+            "post",
+            "/games/gomoku/relationship-events",
+            {"bot_id": 1, "relationship_events": ["user_win"]},
+        ),
+    ],
+)
+def test_protected_endpoints_reject_missing_or_invalid_bearer(
+    client: TestClient, method: str, path: str, json_body: dict | None
+):
+    # Missing bearer token should be rejected consistently.
+    no_auth_res = client.request(method.upper(), path, json=json_body)
+    assert no_auth_res.status_code == 401, no_auth_res.text
+    assert no_auth_res.json().get("detail") == "missing bearer token"
+
+    # Malformed/invalid bearer token should also be rejected.
+    bad_auth_res = client.request(
+        method.upper(), path, json=json_body, headers={"Authorization": "Bearer not_a_real_token"}
+    )
+    assert bad_auth_res.status_code == 401, bad_auth_res.text
 
 
 def test_bot_scoped_routes_return_404_for_unknown_bot(client: TestClient):
@@ -241,6 +317,47 @@ def test_bot_scoped_routes_return_404_for_unknown_bot(client: TestClient):
     assert r.json().get("detail") == "bot not found"
 
 
+def test_bot_chat_routes_enforce_cross_user_isolation(client: TestClient):
+    # User A owns the bot.
+    ra = _register(client, "dn_a", "user_a", "pw_a")
+    assert ra.status_code == 200, ra.text
+    auth_a = _auth_headers(client, "user_a", "pw_a")
+    assert auth_a is not None
+    rb = client.post(
+        "/bots",
+        json={"name": "a_bot", "direction": "x", "primary_interest": "anime"},
+        headers=auth_a,
+    )
+    assert rb.status_code == 200, rb.text
+    bot_id = int(rb.json()["id"])
+
+    # User B is authenticated but should not access User A's bot.
+    rb2 = _register(client, "dn_b", "user_b", "pw_b")
+    assert rb2.status_code == 200, rb2.text
+    auth_b = _auth_headers(client, "user_b", "pw_b")
+    assert auth_b is not None
+
+    r = client.get(f"/bots/{bot_id}/relationship", headers=auth_b)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = client.patch(f"/bots/{bot_id}", json={"name": "hacked_name"}, headers=auth_b)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = client.delete(f"/bots/{bot_id}", headers=auth_b)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = _send_bot(client, bot_id, "hello", auth_headers=auth_b)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+    r = _history_bot(client, bot_id, limit=10, auth_headers=auth_b)
+    assert r.status_code == 404, r.text
+    assert r.json().get("detail") == "bot not found"
+
+
 def test_history_bot_new_bot_returns_empty_messages(client: TestClient):
     r = _register(client, "dn", "u1", "pw1")
     assert r.status_code == 200, r.text
@@ -257,6 +374,38 @@ def test_history_bot_new_bot_returns_empty_messages(client: TestClient):
     r = _history_bot(client, bot_id, limit=50, auth_headers=auth)
     assert r.status_code == 200, r.text
     assert r.json()["messages"] == []
+
+
+def test_history_bot_respects_limit_window(client: TestClient):
+    r = _register(client, "dn", "u_hist", "pw_hist")
+    assert r.status_code == 200, r.text
+    auth = _auth_headers(client, "u_hist", "pw_hist")
+    assert auth is not None
+    rb = client.post(
+        "/bots",
+        json={"name": "hist_bot", "direction": "x", "primary_interest": "anime"},
+        headers=auth,
+    )
+    assert rb.status_code == 200, rb.text
+    bot_id = int(rb.json()["id"])
+
+    r1 = _send_bot(client, bot_id, "m1", auth_headers=auth)
+    assert r1.status_code == 200, r1.text
+    r2 = _send_bot(client, bot_id, "m2", auth_headers=auth)
+    assert r2.status_code == 200, r2.text
+
+    r = _history_bot(client, bot_id, limit=1, auth_headers=auth)
+    assert r.status_code == 200, r.text
+    msgs1 = r.json()["messages"]
+    assert len(msgs1) == 1
+    assert msgs1[0]["role"] == "assistant"
+    assert msgs1[0]["content"] == "contract stub"
+
+    r = _history_bot(client, bot_id, limit=50, auth_headers=auth)
+    assert r.status_code == 200, r.text
+    msgs_all = r.json()["messages"]
+    assert [m["role"] for m in msgs_all] == ["user", "assistant", "user", "assistant"]
+    assert [m["content"] for m in msgs_all] == ["m1", "contract stub", "m2", "contract stub"]
 
 
 # -------------------------
@@ -356,8 +505,11 @@ def test_relationship_returns_shape(client: TestClient):
     body = r.json()
     for key in ("trust", "resonance", "affection", "openness", "mood", "display_name"):
         assert key in body
-    assert isinstance(body["trust"], int)
-    assert isinstance(body["resonance"], int)
+    for key in ("trust", "resonance", "affection", "openness"):
+        assert isinstance(body[key], int)
+        assert 0 <= body[key] <= 100
+    assert isinstance(body["mood"], str)
+    assert body["display_name"] == "dn"
 
 
 def test_create_bot_rejects_duplicate_name_case_insensitive(client: TestClient):

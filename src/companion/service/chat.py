@@ -24,6 +24,7 @@ from companion.infra.message_token_budget import (
 from . import reply_postprocess
 from .bots import _interests_from_bot
 from .gomoku import _gomoku_position_summary_for_prompt, _gomoku_side_chat_reply_rules
+from .memory_extraction import memory_prompt_block_for_user
 from .persona_guard import build_persona_rewrite_instruction, detect_persona_violations
 from .relationships import apply_relationship_triggers_after_turn
 from .system_prompt import build_system_prompt_from_direction
@@ -189,68 +190,75 @@ def _maybe_rewrite_persona_break(
     return rewritten
 
 
-def send_bot_message(
-    user_id: int,
-    bot_id: int,
-    content: str,
-    system_prompt: str,
-    *,
-    trust_delta: int = 0,
-    resonance_delta: int = 0,
-    include_initiative_debug: bool = False,
-    ephemeral_game: Optional[dict] = None,
-    conn: Optional[psycopg.Connection] = None,
-) -> dict:
-    """Bot has one session; save user message, get reply, save assistant message, return reply.
-
-    If ``ephemeral_game`` is set, user/assistant for this turn are not written to ``messages``;
-    the client sends prior in-game lines in ``game_messages``. Main session history still
-    supplies long-term character context.
-    """
-    _ = system_prompt  # Client sends DB-cached copy; LLM uses rebuilt turn_system below.
+def _load_bot_or_raise(user_id: int, bot_id: int, conn: Optional[psycopg.Connection]) -> dict:
     bot = db.get_bot(bot_id, user_id=user_id, conn=conn)
     if bot is None:
         raise ValueError("bot not found")
-    if trust_delta or resonance_delta:
-        db.update_relationship_state(
-            user_id, bot_id, trust_delta, resonance_delta, conn=conn
-        )
-    sid = bot["session_id"]
+    return bot
+
+
+def _persist_user_turn_and_load_messages(
+    *,
+    user_id: int,
+    session_id: int,
+    content: str,
+    conn: Optional[psycopg.Connection],
+) -> tuple[int, list[dict[str, str]]]:
     # Persist chat turns even during minigames, so the transcript remains continuous.
-    mid_user = db.create_message(user_id, sid, "user", content, conn=conn)
-    msgs = db.get_messages_by_session(sid, limit=50, conn=conn)
+    mid_user = db.create_message(user_id, session_id, "user", content, conn=conn)
+    msgs = db.get_messages_by_session(session_id, limit=50, conn=conn)
     openai_messages = [{"role": m["role"], "content": m["content"]} for m in msgs]
-    if ephemeral_game:
-        # The current minigame exchange is persisted above, so we do not append `game_messages`
-        # or duplicate the current user content here. `position_summary` is still used later
-        # for Gomoku constraints and tone alignment.
-        pass
+    return mid_user, openai_messages
+
+
+def _bot_prompt_fields(
+    *,
+    bot: dict,
+    user_id: int,
+    conn: Optional[psycopg.Connection],
+) -> tuple[str, str, str, list[str]]:
     direction = (bot.get("direction") or "").strip() or "a helpful, friendly companion"
     eff_addr = effective_form_of_address(bot.get("form_of_address"), user_id, conn=conn)
     p_int, s_int = _interests_from_bot(bot)
+    return direction, eff_addr, p_int, s_int
 
-    # Optional: apply deterministic relationship deltas from minigame events
-    # before building the prompt for this turn (so mood/stats can influence tone).
-    gomoku_eff: gomoku_relationship.GomokuRelationshipEffect | None = None
-    if ephemeral_game:
-        pos = ephemeral_game.get("position_summary") if isinstance(ephemeral_game, dict) else None
-        rel_events: list[str] = []
-        raw_client_events = (ephemeral_game.get("relationship_events") or []) if isinstance(ephemeral_game, dict) else []
-        if isinstance(raw_client_events, list):
-            rel_events.extend([str(x) for x in raw_client_events if str(x).strip()])
-        if isinstance(pos, dict):
-            evs = pos.get("events")
-            if isinstance(evs, list):
-                if "user_created_threat" in evs:
-                    rel_events.append("user_created_strong_threat")
-                if "user_blocked_bot_threat" in evs:
-                    rel_events.append("user_blocked_bot_threat")
-            mr = pos.get("match_result")
-            if mr in ("user_win", "bot_win"):
-                rel_events.append(str(mr))
-        seen: set[str] = set()
-        rel_events = [e for e in rel_events if not (e in seen or seen.add(e))]
-        gomoku_eff = gomoku_relationship.aggregate_gomoku_relationship_effects(rel_events)
+
+def _collect_gomoku_effect(ephemeral_game: Optional[dict]) -> gomoku_relationship.GomokuRelationshipEffect | None:
+    if not ephemeral_game:
+        return None
+    pos = ephemeral_game.get("position_summary") if isinstance(ephemeral_game, dict) else None
+    rel_events: list[str] = []
+    raw_client_events = (
+        (ephemeral_game.get("relationship_events") or []) if isinstance(ephemeral_game, dict) else []
+    )
+    if isinstance(raw_client_events, list):
+        rel_events.extend([str(x) for x in raw_client_events if str(x).strip()])
+    if isinstance(pos, dict):
+        evs = pos.get("events")
+        if isinstance(evs, list):
+            if "user_created_threat" in evs:
+                rel_events.append("user_created_strong_threat")
+            if "user_blocked_bot_threat" in evs:
+                rel_events.append("user_blocked_bot_threat")
+        mr = pos.get("match_result")
+        if mr in ("user_win", "bot_win"):
+            rel_events.append(str(mr))
+    seen: set[str] = set()
+    rel_events = [e for e in rel_events if not (e in seen or seen.add(e))]
+    return gomoku_relationship.aggregate_gomoku_relationship_effects(rel_events)
+
+
+def _apply_pre_prompt_relationship_effects(
+    *,
+    user_id: int,
+    bot_id: int,
+    content: str,
+    ephemeral_game: Optional[dict],
+    conn: Optional[psycopg.Connection],
+) -> gomoku_relationship.GomokuRelationshipEffect | None:
+    # Apply deterministic relationship deltas before building the prompt so mood/stats affect tone.
+    gomoku_eff = _collect_gomoku_effect(ephemeral_game)
+    if gomoku_eff is not None:
         db.apply_relationship_turn_deltas(
             user_id=user_id,
             bot_id=bot_id,
@@ -264,20 +272,96 @@ def send_bot_message(
             user_message=content,
             conn=conn,
         )
-    else:
-        # Normal chat turn: write a "heartbeat" turn so mood time recovery / bias can progress.
-        db.apply_relationship_turn_deltas(
-            user_id=user_id,
-            bot_id=bot_id,
-            trust_delta=0,
-            resonance_delta=0,
-            affection_delta=0,
-            openness_delta=0,
-            user_message=content,
-            conn=conn,
+        return gomoku_eff
+
+    # Normal chat turn: write a "heartbeat" turn so mood time recovery / bias can progress.
+    db.apply_relationship_turn_deltas(
+        user_id=user_id,
+        bot_id=bot_id,
+        trust_delta=0,
+        resonance_delta=0,
+        affection_delta=0,
+        openness_delta=0,
+        user_message=content,
+        conn=conn,
+    )
+    return None
+
+
+def _append_gomoku_prompt_block(
+    *,
+    turn_system: str,
+    user_id: int,
+    bot_id: int,
+    ephemeral_game: Optional[dict],
+) -> str:
+    if not ephemeral_game:
+        return turn_system
+
+    ag = ephemeral_game.get("active_game") or {}
+    diff = str(ag.get("difficulty", "serious"))
+    turn_now = str(ag.get("current_turn", "user"))
+    bside = str(ag.get("bot_side", "white"))
+    turn_system += (
+        "\n\n[Minigame side-chat — this user/assistant exchange is not saved to the main transcript. "
+        "Stay in character; keep replies concise when they are chatting during play.]\n"
+        "You are playing Gomoku (five in a row) with the user on a 12×12 board (standard consecutive-five win). "
+        f"Difficulty setting: {diff}. "
+        f"The user plays black stones; you (the character) play {bside} stones. "
+        f"Whose turn it is to place a stone on the board right now: {turn_now} "
+        "(if ‘user’, they should move on the board but may still type here; if ‘bot’, you should move on the board when it is your turn). "
+        "If the board analysis says the match has ended, treat that as authoritative and ignore this turn line. "
+        "If they mention the game or the board, respond as their in-character opponent—not a coach (follow the "
+        "Gomoku side-chat rules appended below)."
+    )
+    pos_raw = ephemeral_game.get("position_summary")
+    pos_txt = _gomoku_position_summary_for_prompt(pos_raw)
+    if os.getenv("CHATBOT_LOG_GOMOKU_SUMMARY", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        ensure_companion_stderr_logging()
+        logger.info(
+            "[gomoku ephemeral] user_id=%s bot_id=%s position_summary=%s",
+            user_id,
+            bot_id,
+            "yes" if pos_raw is not None else "no",
         )
+        if pos_raw is not None:
+            try:
+                dbg_json = json.dumps(pos_raw, ensure_ascii=False, indent=2)
+            except (TypeError, ValueError):
+                dbg_json = repr(pos_raw)
+            logger.info("gomoku position_summary JSON:\n%s", dbg_json)
+            if pos_txt:
+                logger.info("gomoku position_summary prompt block:\n%s", pos_txt)
+    if pos_txt:
+        turn_system += (
+            "\n\n[Board analysis — computed on the client from the live grid; trust this over guessing. "
+            "Coordinates are 0-based: x = column, y = row.]\n"
+            f"{pos_txt}"
+        )
+    return turn_system + "\n\n" + _gomoku_side_chat_reply_rules(pos_raw if isinstance(pos_raw, dict) else {})
+
+
+def _build_turn_system_prompt(
+    *,
+    user_id: int,
+    bot_id: int,
+    bot: dict,
+    content: str,
+    openai_messages: list[dict[str, str]],
+    direction: str,
+    eff_addr: str,
+    p_int: str,
+    s_int: list[str],
+    ephemeral_game: Optional[dict],
+    conn: Optional[psycopg.Connection],
+) -> tuple[str, dict]:
     rel = db.get_or_create_relationship(user_id, bot_id, conn=conn)
-    dyn_prompt = build_system_prompt_from_direction(
+    turn_system = build_system_prompt_from_direction(
         direction,
         trust=rel["trust"],
         resonance=rel["resonance"],
@@ -290,9 +374,12 @@ def send_bot_message(
         secondary_interests=s_int,
     )
     nudge = interests.format_interests_dynamic_nudge(content, p_int, s_int)
-    turn_system = dyn_prompt
     if nudge:
         turn_system += f"\n{nudge}"
+    memory_block = memory_prompt_block_for_user(user_id, query=content)
+    if memory_block:
+        turn_system += f"\n\n{memory_block}"
+
     oa_for_ini: list[dict[str, str]] = [
         {"role": str(m["role"]), "content": str(m.get("content") or "")} for m in openai_messages
     ]
@@ -335,62 +422,47 @@ def send_bot_message(
             "greetings, sign-offs, and direct answers about what you call them. "
             "The transcript may still contain an old honorific; ignore it and do not claim the old one is your current habit."
         )
-    if ephemeral_game:
-        ag = ephemeral_game.get("active_game") or {}
-        diff = str(ag.get("difficulty", "serious"))
-        turn_now = str(ag.get("current_turn", "user"))
-        bside = str(ag.get("bot_side", "white"))
-        turn_system += (
-            "\n\n[Minigame side-chat — this user/assistant exchange is not saved to the main transcript. "
-            "Stay in character; keep replies concise when they are chatting during play.]\n"
-            "You are playing Gomoku (five in a row) with the user on a 12×12 board (standard consecutive-five win). "
-            f"Difficulty setting: {diff}. "
-            f"The user plays black stones; you (the character) play {bside} stones. "
-            f"Whose turn it is to place a stone on the board right now: {turn_now} "
-            "(if ‘user’, they should move on the board but may still type here; if ‘bot’, you should move on the board when it is your turn). "
-            "If the board analysis says the match has ended, treat that as authoritative and ignore this turn line. "
-            "If they mention the game or the board, respond as their in-character opponent—not a coach (follow the "
-            "Gomoku side-chat rules appended below)."
-        )
-        pos_raw = ephemeral_game.get("position_summary")
-        pos_txt = _gomoku_position_summary_for_prompt(pos_raw)
-        if os.getenv("CHATBOT_LOG_GOMOKU_SUMMARY", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        ):
-            ensure_companion_stderr_logging()
-            logger.info(
-                "[gomoku ephemeral] user_id=%s bot_id=%s position_summary=%s",
-                user_id,
-                bot_id,
-                "yes" if pos_raw is not None else "no",
-            )
-            if pos_raw is not None:
-                try:
-                    dbg_json = json.dumps(pos_raw, ensure_ascii=False, indent=2)
-                except (TypeError, ValueError):
-                    dbg_json = repr(pos_raw)
-                logger.info("gomoku position_summary JSON:\n%s", dbg_json)
-                if pos_txt:
-                    logger.info("gomoku position_summary prompt block:\n%s", pos_txt)
-        if pos_txt:
-            turn_system += (
-                "\n\n[Board analysis — computed on the client from the live grid; trust this over guessing. "
-                "Coordinates are 0-based: x = column, y = row.]\n"
-                f"{pos_txt}"
-            )
-        turn_system += "\n\n" + _gomoku_side_chat_reply_rules(pos_raw if isinstance(pos_raw, dict) else {})
+
+    turn_system = _append_gomoku_prompt_block(
+        turn_system=turn_system,
+        user_id=user_id,
+        bot_id=bot_id,
+        ephemeral_game=ephemeral_game,
+    )
+    return turn_system, ini_snap
+
+
+def _generate_and_postprocess_reply(
+    *,
+    openai_messages: list[dict[str, str]],
+    turn_system: str,
+    latest_user_message: str,
+    initiative_band: str,
+) -> str:
     reply = get_reply_for_custom_bot(openai_messages, turn_system)
     reply = _maybe_rewrite_persona_break(
         openai_messages=openai_messages,
         turn_system=turn_system,
-        latest_user_message=content,
+        latest_user_message=latest_user_message,
         draft_reply=reply,
     )
-    reply = reply_postprocess.enforce_initiative_closing_question(reply, str(ini_snap["band"]))
-    mid_assistant = db.create_message(user_id, sid, "assistant", reply, conn=conn)
+    return reply_postprocess.enforce_initiative_closing_question(reply, initiative_band)
+
+
+def _finalize_turn(
+    *,
+    user_id: int,
+    bot_id: int,
+    session_id: int,
+    mid_user: int,
+    content: str,
+    reply: str,
+    gomoku_eff: gomoku_relationship.GomokuRelationshipEffect | None,
+    ini_snap: dict,
+    include_initiative_debug: bool,
+    conn: Optional[psycopg.Connection],
+) -> dict:
+    mid_assistant = db.create_message(user_id, session_id, "assistant", reply, conn=conn)
     apply_relationship_triggers_after_turn(user_id, bot_id, content, reply, conn=conn)
     # Ensure Gomoku mood hint survives any trigger-based mood change in the same turn.
     # Apply again with zero stat deltas (no double counting), subject to mood inertia.
@@ -410,7 +482,7 @@ def send_bot_message(
         )
     rel_after = db.get_or_create_relationship(user_id, bot_id, conn=conn)
     out: dict = {
-        "session_id": sid,
+        "session_id": session_id,
         "message_id": mid_user,
         "assistant_message_id": mid_assistant,
         "assistant_reply": reply,
@@ -423,3 +495,75 @@ def send_bot_message(
     if include_initiative_debug:
         out["initiative_debug"] = ini_snap
     return out
+
+
+def send_bot_message(
+    user_id: int,
+    bot_id: int,
+    content: str,
+    system_prompt: str,
+    *,
+    trust_delta: int = 0,
+    resonance_delta: int = 0,
+    include_initiative_debug: bool = False,
+    ephemeral_game: Optional[dict] = None,
+    conn: Optional[psycopg.Connection] = None,
+) -> dict:
+    """Bot has one session; save user message, get reply, save assistant message, return reply.
+
+    If ``ephemeral_game`` is set, user/assistant for this turn are not written to ``messages``;
+    the client sends prior in-game lines in ``game_messages``. Main session history still
+    supplies long-term character context.
+    """
+    _ = system_prompt  # Client sends DB-cached copy; LLM uses rebuilt turn_system below.
+    bot = _load_bot_or_raise(user_id, bot_id, conn)
+    if trust_delta or resonance_delta:
+        db.update_relationship_state(
+            user_id, bot_id, trust_delta, resonance_delta, conn=conn
+        )
+    sid = bot["session_id"]
+    mid_user, openai_messages = _persist_user_turn_and_load_messages(
+        user_id=user_id,
+        session_id=sid,
+        content=content,
+        conn=conn,
+    )
+    direction, eff_addr, p_int, s_int = _bot_prompt_fields(bot=bot, user_id=user_id, conn=conn)
+    gomoku_eff = _apply_pre_prompt_relationship_effects(
+        user_id=user_id,
+        bot_id=bot_id,
+        content=content,
+        ephemeral_game=ephemeral_game,
+        conn=conn,
+    )
+    turn_system, ini_snap = _build_turn_system_prompt(
+        user_id=user_id,
+        bot_id=bot_id,
+        bot=bot,
+        content=content,
+        openai_messages=openai_messages,
+        direction=direction,
+        eff_addr=eff_addr,
+        p_int=p_int,
+        s_int=s_int,
+        ephemeral_game=ephemeral_game,
+        conn=conn,
+    )
+    reply = _generate_and_postprocess_reply(
+        openai_messages=openai_messages,
+        turn_system=turn_system,
+        latest_user_message=content,
+        initiative_band=str(ini_snap["band"]),
+    )
+    return _finalize_turn(
+        user_id=user_id,
+        bot_id=bot_id,
+        session_id=sid,
+        mid_user=mid_user,
+        content=content,
+        reply=reply,
+        gomoku_eff=gomoku_eff,
+        ini_snap=ini_snap,
+        include_initiative_debug=include_initiative_debug,
+        conn=conn,
+    )

@@ -15,6 +15,8 @@ Env:
   OPENAI_MAX_TOKENS — optional main reply token cap (default 1024)
   OPENAI_TIMEOUT_SECONDS — optional OpenAI client timeout
   CHATBOT_TONE_MODEL — model for tone classifier (default gpt-4o-mini); CHATBOT_HOSTILITY_MODEL still accepted as alias
+  RESPAN_MEMORY_MODEL / CHATBOT_MEMORY_MODEL — model for memory extraction JSON
+  RESPAN_EMBEDDING_MODEL / OPENAI_EMBEDDING_MODEL — model for memory embeddings
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ _ClientConfig: TypeAlias = tuple[str, str | None, float | None]
 
 _TONE_TRANSCRIPT_CHAR_LIMIT = 6000
 _TONE_LATEST_CHAR_LIMIT = 2000
+_MEMORY_CONTEXT_CHAR_LIMIT = 6000
+_MEMORY_TURN_CHAR_LIMIT = 4000
 _TONE_CLASSIFIER_SYSTEM_PROMPT = (
     "You judge the USER's latest message in a chat with a fictional character bot. "
     "Reply with ONLY a JSON object, no other text:\n"
@@ -44,6 +48,21 @@ _TONE_CLASSIFIER_SYSTEM_PROMPT = (
     "explicit appreciation, or obvious softening/repair after tension. Routine neutral chat is NOT warm.\n"
     "If the latest message is neither hostile nor specially warm, set both to false.\n"
     "Use prior lines only to disambiguate (e.g. tone shift, sarcasm, or repair)."
+)
+_MEMORY_EXTRACTOR_SYSTEM_PROMPT = (
+    "You extract durable long-term memories about the USER from a chat turn. "
+    "Reply with ONLY a JSON object and no prose, in this exact shape:\n"
+    '{"memories":[{"content":"...","memory_type":"preference|goal|background|instruction",'
+    '"importance":0-100,"evidence":"..."}]}\n'
+    "Return an empty memories array when nothing should be saved. "
+    "Create memories only from durable information stated or corrected in the latest user message. "
+    "Use recent context only to disambiguate corrections or replacements; do not extract or repeat "
+    "memories that appear only in recent context. "
+    "Save only information likely useful across future sessions: stable preferences, goals, "
+    "background facts, or standing instructions. Do not save greetings, temporary requests, "
+    "small talk, one-off questions, or claims invented by the assistant. "
+    "Prefer concise neutral statements like 'User prefers concise replies.' "
+    "If the latest user message corrects an older fact, save only the latest corrected state."
 )
 
 _CACHED_CLIENT: Any | None = None
@@ -86,6 +105,25 @@ def _tone_model() -> str:
         os.getenv("CHATBOT_TONE_MODEL")
         or os.getenv("CHATBOT_HOSTILITY_MODEL")
         or "gpt-4o-mini"
+    ).strip()
+
+
+def _memory_model() -> str:
+    return (
+        os.getenv("RESPAN_MEMORY_MODEL")
+        or os.getenv("CHATBOT_MEMORY_MODEL")
+        or os.getenv("RESPAN_TONE_MODEL")
+        or os.getenv("CHATBOT_TONE_MODEL")
+        or os.getenv("RESPAN_MODEL")
+        or "gpt-4o-mini"
+    ).strip()
+
+
+def _embedding_model() -> str:
+    return (
+        os.getenv("RESPAN_EMBEDDING_MODEL")
+        or os.getenv("OPENAI_EMBEDDING_MODEL")
+        or "text-embedding-3-small"
     ).strip()
 
 
@@ -223,3 +261,81 @@ def classify_user_tone_for_initiative(
     if h is None and w is None:
         h, w = _parse_tone_object_fallback(raw)
     return h, w
+
+
+def extract_memories_json(
+    *,
+    user_message: str,
+    assistant_response: str,
+    recent_context: list[ChatMessage] | None = None,
+) -> str:
+    latest_user = (user_message or "").strip()
+    assistant = (assistant_response or "").strip()
+    if not latest_user:
+        logger.debug("extract_memories_json: skipped because latest user message is empty")
+        return '{"memories":[]}'
+
+    try:
+        client = _client()
+    except RuntimeError:
+        logger.debug("extract_memories_json: client unavailable", exc_info=True)
+        return '{"memories":[]}'
+
+    context_lines: list[str] = []
+    for msg in (recent_context or [])[-10:]:
+        role = str(msg.get("role") or "").strip()
+        content = str(msg.get("content") or "").strip()
+        if not role or not content:
+            continue
+        context_lines.append(f"{role}: {content[:800]}")
+    context = "\n".join(context_lines)
+
+    user_block = (
+        "Recent context (oldest first, use only to disambiguate corrections):\n"
+        f"{context[:_MEMORY_CONTEXT_CHAR_LIMIT] or '(none)'}\n\n"
+        "Latest user message:\n"
+        f"{latest_user[:_MEMORY_TURN_CHAR_LIMIT]}\n\n"
+        "Assistant response:\n"
+        f"{assistant[:_MEMORY_TURN_CHAR_LIMIT]}"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=_memory_model(),
+            messages=[
+                {"role": "system", "content": _MEMORY_EXTRACTOR_SYSTEM_PROMPT},
+                {"role": "user", "content": user_block},
+            ],
+            max_tokens=_positive_int_env("CHATBOT_MEMORY_MAX_TOKENS", 800),
+            temperature=0,
+        )
+        ch0 = resp.choices[0] if resp.choices else None
+        if not ch0 or not ch0.message:
+            logger.debug("extract_memories_json: empty completion response")
+            return '{"memories":[]}'
+
+        return (ch0.message.content or "").strip() or '{"memories":[]}'
+
+    except Exception:
+        logger.debug("extract_memories_json: LLM memory extraction failed", exc_info=True)
+        return '{"memories":[]}'
+
+
+def get_embedding(text: str) -> list[float] | None:
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        client = _client()
+    except RuntimeError:
+        return None
+    try:
+        resp = client.embeddings.create(model=_embedding_model(), input=text)
+        data0 = resp.data[0] if resp.data else None
+        embedding = getattr(data0, "embedding", None)
+        if not isinstance(embedding, list):
+            return None
+        return [float(x) for x in embedding]
+    except Exception:
+        logger.debug("get_embedding: embedding call failed", exc_info=True)
+        return None

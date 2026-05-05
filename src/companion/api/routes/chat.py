@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from companion import service
 from companion.api.deps import get_current_user_id, get_db_conn
@@ -36,6 +36,7 @@ def history_bot(
 @router.post("/send-bot-message")
 def send_bot_message(
     payload: SendBotMessageIn,
+    background_tasks: BackgroundTasks,
     user_id: int = Depends(get_current_user_id),
     conn=Depends(get_db_conn),
 ):
@@ -55,6 +56,16 @@ def send_bot_message(
             conn=conn,  # type: ignore
         )
         display_name = service.get_display_name(user_id, conn=conn)  # type: ignore
+        # Background tasks use their own connection, so the chat turn must be visible first.
+        conn.commit()  # type: ignore[attr-defined]
+        background_tasks.add_task(
+            service.run_memory_pipeline_for_turn,
+            user_id=user_id,
+            session_id=int(res["session_id"]),
+            source_message_id=int(res["message_id"]),
+            user_message=payload.content,
+            assistant_response=str(res["assistant_reply"]),
+        )
         return {**res, "display_name": display_name or ""}
     except ValueError as e:
         raise _value_error_to_http(e)

@@ -29,6 +29,14 @@ from .chat import (
     send_bot_message,
 )
 from .gomoku import _gomoku_position_summary_for_prompt, _gomoku_side_chat_reply_rules
+from .memory_extraction import (
+    build_memory_prompt_block,
+    MemoryCandidate,
+    memory_prompt_block_for_user,
+    parse_memory_candidates,
+    retrieve_prompt_memories_for_user,
+    run_memory_pipeline_for_turn,
+)
 from .relationships import (
     apply_relationship_triggers_after_turn,
     get_relationship,
@@ -68,7 +76,13 @@ __all__ = [
     "issue_access_token",
     "login",
     "logout",
+    "build_memory_prompt_block",
+    "MemoryCandidate",
+    "memory_prompt_block_for_user",
+    "parse_memory_candidates",
     "register_user",
+    "retrieve_prompt_memories_for_user",
+    "run_memory_pipeline_for_turn",
     "send_and_get_history",
     "send_bot_message",
     "update_bot",

@@ -21,4 +21,4 @@ def test_normalize_unknown_defaults_gentle():
 
 
 def test_all_styles_count():
-    assert len(ALL_GAME_REPLY_STYLES) == 4
+    assert set(ALL_GAME_REPLY_STYLES) == {"tsundere", "playful", "cool", "gentle"}
