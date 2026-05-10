@@ -260,7 +260,6 @@ def test_history_bot_missing_bot_id_returns_422(client: TestClient):
         ),
         ("post", "/chat/history/bot", {"bot_id": 1, "limit": 10}),
         ("post", "/chat/end", None),
-        ("post", "/chat/build-prompt", {"bot_id": 1, "direction": "x"}),
         (
             "post",
             "/games/gomoku/relationship-events",
@@ -303,14 +302,6 @@ def test_bot_scoped_routes_return_404_for_unknown_bot(client: TestClient):
     r = client.post(
         "/games/gomoku/relationship-events",
         json={"bot_id": 999, "relationship_events": ["user_win"]},
-        headers=auth,
-    )
-    assert r.status_code == 404, r.text
-    assert r.json().get("detail") == "bot not found"
-
-    r = client.post(
-        "/chat/build-prompt",
-        json={"bot_id": 999, "direction": "x"},
         headers=auth,
     )
     assert r.status_code == 404, r.text

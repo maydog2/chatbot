@@ -98,6 +98,67 @@ export type Bot = {
   created_at: string;
 };
 
+export type RateLimitRouteGroup =
+  | "login"
+  | "register"
+  | "chat_send"
+  | "bot_create"
+  | "profile_update"
+  | "default";
+
+type ApiErrorPayload = {
+  detail?: unknown;
+  code?: unknown;
+  route_group?: unknown;
+  message?: unknown;
+};
+
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+  code?: string;
+  routeGroup?: string;
+  retryAfter?: number;
+
+  constructor(status: number, payload: ApiErrorPayload, statusText: string, retryAfterHeader: string | null) {
+    const detail = payload.detail;
+    const fallbackMessage =
+      typeof detail === "string"
+        ? detail
+        : detail != null
+          ? JSON.stringify(detail)
+          : statusText || "Request failed";
+    const message = typeof payload.message === "string" ? payload.message : fallbackMessage;
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+    this.code = typeof payload.code === "string" ? payload.code : undefined;
+    this.routeGroup = typeof payload.route_group === "string" ? payload.route_group : undefined;
+    this.retryAfter = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : undefined;
+  }
+}
+
+export function rateLimitTranslationKey(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.status !== 429 || err.code !== "rate_limit_exceeded") {
+    return null;
+  }
+  switch (err.routeGroup) {
+    case "login":
+      return "error.rateLimit.login";
+    case "register":
+      return "error.rateLimit.register";
+    case "chat_send":
+      return "error.rateLimit.chatSend";
+    case "bot_create":
+      return "error.rateLimit.botCreate";
+    case "profile_update":
+      return "error.rateLimit.profileUpdate";
+    default:
+      return "error.rateLimit.default";
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit & { token?: string | null; json?: object } = {}
@@ -112,14 +173,12 @@ async function request<T>(
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers, body });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    const detail = (err as { detail?: unknown }).detail;
-    const msg =
-      typeof detail === "string"
-        ? detail
-        : detail != null
-          ? JSON.stringify(detail)
-          : res.statusText || "Request failed";
-    throw new Error(msg);
+    throw new ApiError(
+      res.status,
+      err as ApiErrorPayload,
+      res.statusText,
+      res.headers.get("Retry-After")
+    );
   }
   return res.json() as Promise<T>;
 }
@@ -276,17 +335,4 @@ export const api = {
       },
     }),
 
-  buildPrompt: (token: string, bot_id: number, direction: string) =>
-    request<{ system_prompt: string }>("/chat/build-prompt", {
-      method: "POST",
-      token,
-      json: { bot_id, direction },
-    }),
-
-  reply: (token: string, messages: Array<{ role: string; content: string }>, system_prompt: string) =>
-    request<{ assistant_reply: string }>("/chat/reply", {
-      method: "POST",
-      token,
-      json: { messages, system_prompt },
-    }),
 };

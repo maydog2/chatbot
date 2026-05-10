@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api, type Message, type Relationship, type Bot } from "@/lib/api";
+import { api, rateLimitTranslationKey, type Message, type Relationship, type Bot } from "@/lib/api";
 import {
   DEFAULT_PRIMARY_INTEREST_KEY,
   PRIMARY_INTEREST_OPTIONS,
@@ -29,6 +29,12 @@ const TOKEN_KEY = "chatbot_token";
 
 
 const MAX_BOTS = 10;
+
+function errorMessage(err: unknown, fallback: string, tr: (key: string) => string): string {
+  const rateLimitKey = rateLimitTranslationKey(err);
+  if (rateLimitKey) return tr(rateLimitKey);
+  return err instanceof Error ? err.message : fallback;
+}
 
 /** Remember Me: Reads the token from localStorage or sessionStorage (if a user has logged in previously on the same machine and browser, re-authentication is not required). */
 function getStoredToken(): string | null {
@@ -376,7 +382,7 @@ export default function Home() {
       setCustomBots((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setBotProfilePersonaEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveDirection"));
+      setError(errorMessage(err, tr("error.saveDirection"), tr));
     } finally {
       setBotProfilePersonaSaving(false);
     }
@@ -393,7 +399,7 @@ export default function Home() {
       setCustomBots((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setBotProfileInitiativeEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveInitiative"));
+      setError(errorMessage(err, tr("error.saveInitiative"), tr));
     } finally {
       setBotProfileInitiativeSaving(false);
     }
@@ -416,7 +422,7 @@ export default function Home() {
       );
       setBotProfileGameReplyEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveGameReplyStyle"));
+      setError(errorMessage(err, tr("error.saveGameReplyStyle"), tr));
     } finally {
       setBotProfileGameReplySaving(false);
     }
@@ -436,7 +442,7 @@ export default function Home() {
       setCustomBots((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setBotProfileInterestsEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveInterests"));
+      setError(errorMessage(err, tr("error.saveInterests"), tr));
     } finally {
       setBotProfileInterestsSaving(false);
     }
@@ -456,7 +462,7 @@ export default function Home() {
       setCustomBots((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setBotProfileNameEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveName"));
+      setError(errorMessage(err, tr("error.saveName"), tr));
     } finally {
       setBotProfileNameSaving(false);
     }
@@ -473,7 +479,7 @@ export default function Home() {
       setCustomBots((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
       setBotProfileFoaEditing(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.saveFoa"));
+      setError(errorMessage(err, tr("error.saveFoa"), tr));
     } finally {
       setBotProfileFoaSaving(false);
     }
@@ -635,7 +641,7 @@ export default function Home() {
       }
       setEditBotModal(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.updateFailed"));
+      setError(errorMessage(err, tr("error.updateFailed"), tr));
     }
   };
 
@@ -724,7 +730,7 @@ export default function Home() {
         setSidebarView("add-bot");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.loginFailed"));
+      setError(errorMessage(err, tr("error.loginFailed"), tr));
     } finally {
       setLoading(false);
     }
@@ -754,7 +760,7 @@ export default function Home() {
         setSidebarView("add-bot");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.registerFailed"));
+      setError(errorMessage(err, tr("error.registerFailed"), tr));
     } finally {
       setLoading(false);
     }
@@ -895,7 +901,7 @@ export default function Home() {
         applyRelationshipFromSend(res);
         gomokuRestartedWhileLosingRef.current = false;
       } catch (err) {
-        setError(err instanceof Error ? err.message : tr("error.sendFailed"));
+        setError(errorMessage(err, tr("error.sendFailed"), tr));
         setGomokuGameChat((prev) => prev.slice(0, -1));
       } finally {
         setLoading(false);
@@ -919,7 +925,7 @@ export default function Home() {
       setMessages((prev) => sortMessagesByOrder([...prev, assistantMsg]));
       applyRelationshipFromSend(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.sendFailed"));
+      setError(errorMessage(err, tr("error.sendFailed"), tr));
       setMessages((prev) => prev.slice(0, -1));
     } finally {
       setLoading(false);
@@ -958,7 +964,7 @@ export default function Home() {
       setRelationship((prev) => (prev ? { ...prev, display_name: updated.display_name } : prev));
       setEditMeModal(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.updateFailed"));
+      setError(errorMessage(err, tr("error.updateFailed"), tr));
     }
   };
 
@@ -1006,7 +1012,7 @@ export default function Home() {
       }
       setAvatarModal(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.updateFailed"));
+      setError(errorMessage(err, tr("error.updateFailed"), tr));
     }
   };
 
@@ -2547,7 +2553,7 @@ function AddBotView({
       await onSaved?.(created);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr("error.createBot"));
+      setError(errorMessage(err, tr("error.createBot"), tr));
     } finally {
       setBuilding(false);
     }

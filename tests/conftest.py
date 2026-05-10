@@ -15,10 +15,15 @@ def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 @pytest.fixture(scope="session", autouse=True)
-def _use_test_db_and_reset_schema():
+def _use_test_db_and_reset_schema(request: pytest.FixtureRequest):
     """
     Force all tests to use the test database, and reset schema once per test session.
     """
+    if request.session.items and all(
+        item.get_closest_marker("no_db") for item in request.session.items
+    ):
+        return
+
     test_db_url = os.getenv(
         "TEST_DB_URL",
         "postgresql://app:app_pw_123@127.0.0.1:5433/companion_test",

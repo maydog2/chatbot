@@ -389,53 +389,6 @@ Returns up to `limit` messages for that bot’s session, chronological order.
 
 - Does not call the LLM. History/`bot_id` behavior: [Appendix B](#appendix-b--current-http-behavior-and-edge-cases).
 
-#### POST /chat/build-prompt
-
-Returns a **preview** `system_prompt` string from `direction` plus the user’s **first** bot’s relationship/profile context (no LLM).
-
-**Authentication:** Required.
-
-**Request body**
-
-```json
-{ "direction": "Draft persona text." }
-```
-
-**Response**
-
-```json
-{ "system_prompt": "…" }
-```
-
-**Notes**
-
-- **400** if user has no bots.
-
-#### POST /chat/reply
-
-One LLM completion from `messages` + `system_prompt`; **no DB read/write**.
-
-**Authentication:** Required.
-
-**Request body**
-
-```json
-{
-  "messages": [{ "role": "user", "content": "Hi" }],
-  "system_prompt": "You are helpful."
-}
-```
-
-**Response**
-
-```json
-{ "assistant_reply": "Hello!" }
-```
-
-**Notes**
-
-- For persisted bot chat with relationship updates, use **POST /chat/send-bot-message**.
-
 #### POST /chat/end
 
 Ends a **user-level** “current session” (legacy helper); not the same as per-bot `session_id`.
@@ -537,12 +490,6 @@ Read-only snapshot: trust, resonance, affection, openness, mood, plus the human 
 6. GET /bots/{bot_id}/relationship  
 7. POST /users/logout (optional)
 
-**Preview only**
-
-1. Login → POST /bots (if needed)  
-2. POST /chat/build-prompt  
-3. Optional: POST /chat/reply (nothing persisted)
-
 **Gomoku: immediate relationship refresh (no chat)**
 
 1. Login → POST /bots (if needed)  
@@ -554,6 +501,37 @@ Read-only snapshot: trust, resonance, affection, openness, mood, plus the human 
 ## 7. Notes
 
 Relationship rules and effective prompts are **server-controlled** and may change between releases. Reply wording depends on configured model/provider (`OPENAI_*` env). Use this document with **`GET /docs`**; route-specific behavior is summarized in **Appendix B**.
+
+## 8. Rate limiting
+
+When `RATE_LIMIT_ENABLED=1`, the API applies Redis-backed, application-level rate limits before route dependencies run. The middleware tries to resolve the bearer token to a user id for authenticated routes; if the token is missing or invalid, requests are limited by client IP instead.
+
+Default route groups:
+
+- `POST /users/login`: `5/min/IP`.
+- `POST /users/register`: `3/min/IP`.
+- `POST /chat/send-bot-message`: `10/min/user` when authenticated, otherwise `10/min/IP`.
+- `POST /bots`: `5/min/user` when authenticated, otherwise `5/min/IP`.
+- `PATCH /users/me` and `PATCH /bots/{bot_id}`: `20/min/user` when authenticated, otherwise `20/min/IP`.
+- Other API routes: `60/min/user` when authenticated, otherwise `60/min/IP`.
+
+Configuration variables:
+
+- `RATE_LIMIT_ENABLED`: enable or disable application-level rate limiting.
+- `RATE_LIMIT_REDIS_URL`: Redis or Upstash Redis URL shared by all API replicas.
+- `RATE_LIMIT_DEFAULT_PER_MINUTE`: default route group limit, default `60`.
+- `RATE_LIMIT_LOGIN_PER_MINUTE`: login limit, default `5`.
+- `RATE_LIMIT_REGISTER_PER_MINUTE`: registration limit, default `3`.
+- `RATE_LIMIT_CHAT_SEND_PER_MINUTE`: normal bot chat send limit, default `10`.
+- `RATE_LIMIT_BOT_CREATE_PER_MINUTE`: bot creation limit, default `5`.
+- `RATE_LIMIT_PROFILE_UPDATE_PER_MINUTE`: profile and bot settings update limit, default `20`.
+- `RATE_LIMIT_EXEMPT_PATHS`: comma-separated path allowlist, default `/health,/ready,/docs,/openapi.json,/redoc`.
+- `RATE_LIMIT_TRUST_PROXY_HEADERS`: when `1`, use `X-Forwarded-For` / `X-Real-IP` before `request.client.host`.
+- `RATE_LIMIT_LOG_SECRET`: optional secret for hashing identity values in warning logs; falls back to `AUTH_TOKEN_SECRET`.
+
+If Redis/Upstash is temporarily unavailable, rate limiting fails open so the API remains available. The server emits structured warning logs with `path`, `route_group`, `identity_type`, `hashed_identity`, and `error_type`; logs must not include raw bearer tokens, raw IPs, usernames, display names, emails, or other user-identifiable data.
+
+On `429` responses, clients receive `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers. This protects application-level abuse and excessive LLM usage, but does not replace edge-level DDoS protection.
 
 ---
 
@@ -587,7 +565,7 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 - **History:** `POST /chat/history/bot` with unknown `bot_id` for the user → **200**, `"messages": []`.
 - **Send message:** wrong `bot_id` → **400**, `detail`: `"bot not found"`.
 - **Relationship:** invalid `bot_id` may surface as **500** if the stack raises **`ValueError`** without an **`HTTPException`** wrapper.
-- **LLM / config:** missing **`OPENAI_API_KEY`** is often handled inside **`get_reply_for_custom_bot`** with a fallback assistant string → **200** on **send-bot-message** / **reply** in those cases, rather than **503**.
+- **LLM / config:** missing **`OPENAI_API_KEY`** is often handled inside **`get_reply_for_custom_bot`** with a fallback assistant string → **200** on **send-bot-message** in those cases, rather than **503**.
 - **503** on LLM routes: some propagated **`RuntimeError`** paths (e.g. invalid API key); see **`except RuntimeError`** on chat (and create-bot) in `companion/api.py`.
 - **Games:** **POST /games/gomoku/relationship-events** does not call the LLM; failures are usually **422** (validation) or depend on DB/bot resolution like other authenticated bot-scoped routes.
 
@@ -596,7 +574,6 @@ How the current handlers attach HTTP statuses and bodies to outcomes—useful fo
 - The **effective** model system prompt for **POST /chat/send-bot-message** is rebuilt server-side from the bot’s **`direction`**, relationship metrics, interests, initiative, addressing, relevant active long-term memories, etc. The **`system_prompt`** field in the request body is **not** the sole source for the actual LLM call (compatibility field; implementation ignores it for the real turn prompt).
 - Long-term memory retrieval is user-scoped and active-only. When embeddings are available, the backend uses pgvector top-k search; otherwise it falls back to importance/recency ordering.
 - Memory extraction is asynchronous relative to the HTTP response path. The extractor only creates memory candidates from the latest user message and uses recent context for disambiguation, not for re-extracting old facts.
-- **POST /chat/build-prompt** uses the authenticated user’s **first** bot for relationship context when composing text; it does not call the LLM.
 - **Provider:** model, base URL, and behavior follow **`OPENAI_API_KEY`**, optional **`OPENAI_BASE_URL`**, **`OPENAI_MODEL`**, etc.; output is non-deterministic across providers and runs.
 - **Minigame (`ephemeral_game`):** the server appends **Gomoku** constraints and, when provided, a **board-analysis** block from **`position_summary`** so the model does not contradict the client-held game state. Relationship deltas from **`relationship_events`** / **`position_summary`** may be applied on that turn (in addition to the usual post-reply trigger classifier).
 

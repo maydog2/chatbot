@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from companion import service
+from companion.api.rate_limit import RateLimitMiddleware, close_rate_limit_redis
 from companion.api.routes import auth, bots, chat, games, users
 from companion.infra import db
 
@@ -43,11 +44,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await close_rate_limit_redis()
         db.close_pool()
 
 
 app = FastAPI(title="ChatBot API", lifespan=lifespan)
 
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow_origins(),

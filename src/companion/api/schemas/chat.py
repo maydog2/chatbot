@@ -43,11 +43,3 @@ class SendBotMessageIn(BaseModel):
     ephemeral_game: EphemeralGameIn | None = None
 
 
-class BuildPromptIn(BaseModel):
-    bot_id: int = Field(gt=0)
-    direction: str = ""
-
-
-class ReplyIn(BaseModel):
-    messages: list[dict[str, str]]  # [{"role": "user"|"assistant", "content": "..."}]
-    system_prompt: str
