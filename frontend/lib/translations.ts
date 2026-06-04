@@ -34,6 +34,8 @@ const en: Record<string, string> = {
   "nav.addBot": "Add bot",
   "nav.botOptions": "Options",
 
+  "bots.loading": "Loading bots…",
+
   "sidebar.rename": "Rename",
   "sidebar.editDirection": "Edit direction",
   "sidebar.editFormOfAddress": "Edit form of address",
@@ -50,6 +52,8 @@ const en: Record<string, string> = {
   "chat.send": "Send",
   "chat.thinking": "Thinking…",
   "chat.refresh": "Refresh",
+  "chat.refreshing": "Refreshing…",
+  "chat.loadingHistory": "Loading conversation…",
   "chat.typing": "{name} is typing",
 
   "games.menu": "Games",
@@ -366,6 +370,8 @@ const zh: Record<string, string> = {
   "nav.addBot": "添加机器人",
   "nav.botOptions": "选项",
 
+  "bots.loading": "正在加载角色…",
+
   "sidebar.rename": "重命名",
   "sidebar.editDirection": "编辑人设方向",
   "sidebar.editFormOfAddress": "编辑称呼方式",
@@ -382,6 +388,8 @@ const zh: Record<string, string> = {
   "chat.send": "发送",
   "chat.thinking": "正在输入…",
   "chat.refresh": "刷新",
+  "chat.refreshing": "刷新中…",
+  "chat.loadingHistory": "正在加载对话…",
   "chat.typing": "{name} 正在输入",
 
   "games.menu": "游戏",

@@ -119,6 +119,9 @@ export default function Home() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [botTyping, setBotTyping] = useState(false);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [historyRefreshSettled, setHistoryRefreshSettled] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [me, setMe] = useState<{ display_name: string; avatar_data_url: string | null } | null>(null);
   const [authTab, setAuthTab] = useState<"login" | "register">("login");
   const [showPassword, setShowPassword] = useState(false);
@@ -151,6 +154,7 @@ export default function Home() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const sendInputRef = useRef<HTMLTextAreaElement>(null);
   const statExplainRootRef = useRef<HTMLDivElement>(null);
+  const historyRefreshSettledTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Sticky minigame relationship events: applied once on next gomoku side-chat send.
   const gomokuRestartedWhileLosingRef = useRef(false);
   const gomokuImmediateAppliedRef = useRef<Set<string>>(new Set());
@@ -355,6 +359,12 @@ export default function Home() {
   }, [selectedBotId]);
 
   useEffect(() => {
+    return () => {
+      if (historyRefreshSettledTimerRef.current) clearTimeout(historyRefreshSettledTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!botProfileOpen) {
       setBotProfilePersonaEditing(false);
       setBotProfileInterestsEditing(false);
@@ -526,18 +536,27 @@ export default function Home() {
   }, [fetchBots]);
 
   useEffect(() => {
-    if (!token || sidebarView !== "chat" || selectedBotId === "add-bot") return;
+    if (!token || sidebarView !== "chat" || selectedBotId === "add-bot") {
+      setHistoryLoading(false);
+      return;
+    }
     let cancelled = false;
     const botId = selectedBotId as number;
+    setHistoryLoading(true);
+    setMessages([]);
     (async () => {
       try {
         const res = await api.historyBot(token, botId);
         if (!cancelled) setMessages(sortMessagesByOrder(res.messages ?? []));
       } catch {
         if (!cancelled) setMessages([]);
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [token, sidebarView, selectedBotId]);
 
   // Auto-scroll to newest message (and typing indicator).
@@ -1017,12 +1036,23 @@ export default function Home() {
   };
 
   const handleRefreshHistory = async () => {
-    if (selectedBotId === "add-bot" || !token) return;
+    if (selectedBotId === "add-bot" || !token || historyRefreshing) return;
+    const minVisibleMs = 450;
+    const started = Date.now();
+    setHistoryRefreshSettled(false);
+    setHistoryRefreshing(true);
     try {
       const res = await api.historyBot(token, selectedBotId);
       setMessages(sortMessagesByOrder(res.messages ?? []));
     } catch {
       setMessages([]);
+    } finally {
+      const wait = Math.max(0, minVisibleMs - (Date.now() - started));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      setHistoryRefreshing(false);
+      setHistoryRefreshSettled(true);
+      if (historyRefreshSettledTimerRef.current) clearTimeout(historyRefreshSettledTimerRef.current);
+      historyRefreshSettledTimerRef.current = setTimeout(() => setHistoryRefreshSettled(false), 480);
     }
   };
 
@@ -1074,6 +1104,7 @@ export default function Home() {
     return (
       <div className="wrap">
         <h1>{tr("common.chatbot")}</h1>
+        <div className="auth-card">
         <div className="user-menu-lang user-menu-lang-auth" aria-label={tr("lang.label")}>
           <span className="user-menu-lang-label">{tr("lang.label")}</span>
           <div className="user-menu-lang-toggles">
@@ -1178,6 +1209,7 @@ export default function Home() {
           </form>
         )}
         {error && <p className="error">{error}</p>}
+        </div>
       </div>
     );
   }
@@ -1351,7 +1383,24 @@ export default function Home() {
             </div>
           </div>
         </header>
-        {sidebarView === "chat" && (
+        {token && !botsLoaded && (
+          <div className="connection-error-wrap connection-loading-wrap app-loading-panel" role="status" aria-live="polite">
+            <p className="connection-error-text">{tr("bots.loading")}</p>
+            <div className="connection-loading-spinner" aria-hidden />
+          </div>
+        )}
+        {token && botsLoaded && connectionError && (
+          <div className="connection-error-wrap" role="alert">
+            <h2 className="connection-error-title">{tr("connection.unableTitle")}</h2>
+            <p className="connection-error-text">
+              {tr("connection.unableBody")}
+            </p>
+            <button type="button" className="connection-error-retry" onClick={retryConnection}>
+              {tr("common.retry")}
+            </button>
+          </div>
+        )}
+        {token && botsLoaded && !connectionError && sidebarView === "chat" && selectedBotId !== "add-bot" && (
           <>
             {!gomokuBoardOpen ? (
               <div className="wrap chat-wrap">
@@ -1482,20 +1531,50 @@ export default function Home() {
                         </span>
                       </div>
                     )}
-                    <button type="button" onClick={handleRefreshHistory} className="btn-sm btn-refresh">
-                      {tr("chat.refresh")}
+                    <button
+                      type="button"
+                      onClick={handleRefreshHistory}
+                      className={`btn-sm btn-refresh${historyRefreshing ? " btn-refresh--active" : ""}`}
+                      disabled={historyRefreshing || historyLoading || botTyping}
+                      aria-busy={historyRefreshing}
+                    >
+                      {historyRefreshing ? (
+                        <>
+                          <span className="btn-refresh-spinner" aria-hidden />
+                          {tr("chat.refreshing")}
+                        </>
+                      ) : (
+                        tr("chat.refresh")
+                      )}
                     </button>
                   </div>
                 </header>
                 {gomokuSessionSinceMs != null && <GomokuGameResumeBar tr={tr} onShowBoard={() => setGomokuBoardOpen(true)} />}
-                <div className="messages" ref={messagesRef}>
+                <div
+                  className={`messages${historyRefreshing ? " messages--refreshing" : ""}${historyRefreshSettled ? " messages--refresh-settled" : ""}${historyLoading && gomokuSessionSinceMs == null ? " messages--history-loading" : ""}`}
+                  ref={messagesRef}
+                  aria-busy={historyRefreshing || historyLoading}
+                  aria-live="polite"
+                >
                   {(() => {
                     const thread =
                       gomokuSessionSinceMs != null ? gomokuCompanionMessages : sortMessagesByOrder(messages);
+                    const showHistoryLoading = historyLoading && gomokuSessionSinceMs == null;
                     return (
                       <>
-                        {thread.length === 0 && <p className="muted">{tr("chat.noMessages")}</p>}
-                        {mapMessageList(thread)}
+                        {showHistoryLoading ? (
+                          <div className="messages-loading" role="status" aria-live="polite">
+                            <div className="messages-loading-card">
+                              <div className="connection-loading-spinner messages-loading-spinner" aria-hidden />
+                              <p className="messages-loading-text">{tr("chat.loadingHistory")}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {thread.length === 0 && <p className="muted">{tr("chat.noMessages")}</p>}
+                            {mapMessageList(thread)}
+                          </>
+                        )}
                       </>
                     );
                   })()}
@@ -1533,7 +1612,7 @@ export default function Home() {
                           (e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
                         }
                       }}
-                      disabled={loading}
+                      disabled={loading || historyLoading}
                       rows={1}
                       className="send-input"
                     />
@@ -1543,7 +1622,7 @@ export default function Home() {
                         <button
                           type="submit"
                           className="send-btn-icon"
-                          disabled={loading || !input.trim()}
+                          disabled={loading || historyLoading || !input.trim()}
                           aria-label={tr("chat.send")}
                         >
                           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -1597,24 +1676,7 @@ export default function Home() {
             )}
           </>
         )}
-        {sidebarView === "add-bot" && !botsLoaded && (
-          <div className="connection-error-wrap connection-loading-wrap" role="status" aria-live="polite">
-            <p className="connection-error-text">{tr("connection.connecting")}</p>
-            <div className="connection-loading-spinner" aria-hidden />
-          </div>
-        )}
-        {sidebarView === "add-bot" && botsLoaded && connectionError && (
-          <div className="connection-error-wrap" role="alert">
-            <h2 className="connection-error-title">{tr("connection.unableTitle")}</h2>
-            <p className="connection-error-text">
-              {tr("connection.unableBody")}
-            </p>
-            <button type="button" className="connection-error-retry" onClick={retryConnection}>
-              {tr("common.retry")}
-            </button>
-          </div>
-        )}
-        {sidebarView === "add-bot" && botsLoaded && !connectionError && (
+        {token && botsLoaded && !connectionError && sidebarView === "add-bot" && (
           <AddBotView
             token={token}
             botCount={customBots.length}
